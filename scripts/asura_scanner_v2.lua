@@ -11,7 +11,7 @@
 -- ==========================================
 local CONFIG = {
     THREAD_ID = "thread_" .. math.random(1000, 9999), -- Unique thread ID
-    BRAIN_URL = "https://asura-scanner-system-v2-production.up.railway.app",
+    BRAIN_URL = "https://vippro-production-0683.up.railway.app",
     AUTO_HOP = true,
     WAIT_TIME_PER_SERVER = 8, -- Tăng thời gian để quét kỹ hơn
     FISHSTRAP_URL = "https://www.fishstrap.app/v1/joingame?placeId=13358463560&gameInstanceId=",

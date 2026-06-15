@@ -275,6 +275,26 @@ class DatabaseAPI {
             throw error;
         }
     }
+
+    async scanJobIds() {
+        try {
+            const response = await fetch(`${this.brainUrl}/scan-jobids`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`❌ Scan JobIds Error:`, error);
+            throw error;
+        }
+    }
 }
 
 // ==========================================
@@ -395,6 +415,10 @@ const commands = [
                     { name: 'gangs - Clear gangs only', value: 'gangs' },
                     { name: 'servers - Clear servers only', value: 'servers' }
                 )),
+
+    new SlashCommandBuilder()
+        .setName('scan')
+        .setDescription('[ADMIN] Quét JobId mới để thêm vào queue'),
 ];
 
 // ==========================================
