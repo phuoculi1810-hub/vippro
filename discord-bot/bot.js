@@ -251,6 +251,30 @@ class DatabaseAPI {
     async getRiftServers() {
         return await this.makeRequest('/rift');
     }
+
+    async clearData(type) {
+        try {
+            const response = await fetch(`${this.brainUrl}/clear-data`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    type: type,
+                    confirm: true  // Add required confirm field
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`❌ Clear Data Error:`, error);
+            throw error;
+        }
+    }
 }
 
 // ==========================================
@@ -356,6 +380,21 @@ const commands = [
     new SlashCommandBuilder()
         .setName('stats')
         .setDescription('[ADMIN] Xem thống kê sử dụng bot'),
+
+    new SlashCommandBuilder()
+        .setName('clear')
+        .setDescription('[ADMIN] Clear database (players/gangs/servers)')
+        .addStringOption(option =>
+            option.setName('type')
+                .setDescription('Loại data cần clear')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'old - Clear servers ≥38h old', value: 'old' },
+                    { name: 'confirm - Clear all data', value: 'confirm' },
+                    { name: 'players - Clear players only', value: 'players' },
+                    { name: 'gangs - Clear gangs only', value: 'gangs' },
+                    { name: 'servers - Clear servers only', value: 'servers' }
+                )),
 ];
 
 // ==========================================
@@ -628,6 +667,54 @@ client.on('interactionCreate', async (interaction) => {
             return await interaction.editReply({ embeds: [embed] });
         }
 
+        if (commandName === 'clear') {
+            if (!isAdmin(userId)) {
+                return await interaction.editReply({ content: '❌ Chỉ admin mới có thể sử dụng lệnh này!' });
+            }
+
+            const type = interaction.options.getString('type');
+
+            try {
+                const result = await databaseAPI.clearData(type);
+                
+                if (result.success) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('🧹 Database Cleared Successfully')
+                        .setColor(0x00ff00)
+                        .addFields(
+                            { name: 'Clear Type', value: type, inline: true },
+                            { name: 'Executed By', value: username, inline: true },
+                            { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true }
+                        );
+
+                    if (result.cleared) {
+                        embed.addFields(
+                            { name: 'Servers Cleared', value: `${result.cleared.servers}`, inline: true },
+                            { name: 'Players Cleared', value: `${result.cleared.players}`, inline: true },
+                            { name: 'Gangs Cleared', value: `${result.cleared.gangs}`, inline: true }
+                        );
+                    }
+
+                    usageLogger.logUsage(userId, username, 'clear', `Success - ${type}`);
+                    return await interaction.editReply({ embeds: [embed] });
+                } else {
+                    usageLogger.logUsage(userId, username, 'clear', 'Failed');
+                    return await interaction.editReply({ content: `❌ Clear failed: ${result.error || 'Unknown error'}` });
+                }
+
+            } catch (apiError) {
+                console.error(`❌ Clear API Error:`, apiError);
+                
+                const errorEmbed = new EmbedBuilder()
+                    .setTitle('❌ Clear Data Error')
+                    .setColor(0xff0000)
+                    .setDescription(`API Error: ${apiError.message}`);
+                
+                usageLogger.logUsage(userId, username, 'clear', 'ERROR');
+                return await interaction.editReply({ embeds: [errorEmbed] });
+            }
+        }
+
     } catch (error) {
         console.error('❌ Command error:', error);
         
@@ -651,8 +738,13 @@ client.once('ready', async () => {
     // Register slash commands
     try {
         console.log('📝 Đang đăng ký slash commands...');
+        console.log(`📝 Commands to register: ${commands.map(cmd => cmd.name).join(', ')}`);
         await client.application.commands.set(commands);
         console.log('✅ Slash commands đã được đăng ký thành công!');
+        
+        // List registered commands for verification
+        const registeredCommands = await client.application.commands.fetch();
+        console.log(`✅ Registered commands: ${registeredCommands.map(cmd => cmd.name).join(', ')}`);
     } catch (error) {
         console.error('❌ Lỗi đăng ký commands:', error);
     }

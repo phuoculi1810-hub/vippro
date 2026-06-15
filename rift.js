@@ -408,6 +408,140 @@ const server = http.createServer((req, res) => {
         } else {
             res.end('NONE');
         }
+    } else if (req.url.startsWith('/player') && req.method === 'GET') {
+        // Search player endpoint: /player?name=playername
+        const url = new URL(req.url, `http://localhost:${PORT}`);
+        const playerName = url.searchParams.get('name');
+        
+        if (!playerName) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: 'Player name is required' }));
+            return;
+        }
+
+        const results = [];
+        for (const [name, data] of Object.entries(db.players)) {
+            if (name.toLowerCase().includes(playerName.toLowerCase())) {
+                results.push({
+                    displayName: name,
+                    jobId: data.jobId,
+                    leaderstats: data.leaderstats || {},
+                    timestamp: data.timestamp
+                });
+            }
+        }
+
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: results }));
+
+    } else if (req.url.startsWith('/gang') && req.method === 'GET') {
+        // Search gang endpoint: /gang?name=gangname
+        const url = new URL(req.url, `http://localhost:${PORT}`);
+        const gangName = url.searchParams.get('name');
+        
+        if (!gangName) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: 'Gang name is required' }));
+            return;
+        }
+
+        const results = [];
+        for (const [name, data] of Object.entries(db.gangs)) {
+            if (name.toLowerCase().includes(gangName.toLowerCase())) {
+                results.push({
+                    Name: name,
+                    jobId: data.jobId,
+                    MemberCount: data.MemberCount || 'N/A',
+                    Owner: data.Owner || 'N/A',
+                    timestamp: data.timestamp
+                });
+            }
+        }
+
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: results }));
+
+    } else if (req.url === '/boss' && req.method === 'GET') {
+        // Find boss servers endpoint
+        const results = [];
+        const now = Math.floor(Date.now() / 1000);
+        
+        for (const [jobId, data] of Object.entries(db.servers)) {
+            const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+            const hours = Math.floor(currentAge / 60);
+            const minutes = currentAge % 60;
+            
+            // Boss spawn logic: odd hours at minute 55
+            let timeToBoss = 0;
+            if (hours % 2 === 0) {
+                // Even hour -> boss at next odd hour minute 55
+                timeToBoss = (60 - minutes) + 55;
+            } else {
+                // Odd hour -> boss at minute 55
+                timeToBoss = 55 - minutes;
+                if (timeToBoss < 0) timeToBoss += 120; // Next cycle
+            }
+            
+            // Only include servers within ±10 minutes of boss spawn
+            if (Math.abs(timeToBoss) <= 10 || (timeToBoss >= 110 && timeToBoss <= 130)) {
+                results.push({
+                    jobId: jobId,
+                    serverTime: `${hours}h ${minutes}m`,
+                    bossTimeLeft: `${timeToBoss > 0 ? '+' : ''}${timeToBoss}m`,
+                    status: timeToBoss <= 0 ? 'spawned' : 'coming'
+                });
+            }
+        }
+        
+        // Sort by closest to boss time
+        results.sort((a, b) => {
+            const aTime = parseInt(a.bossTimeLeft.replace(/[^\-\d]/g, ''));
+            const bTime = parseInt(b.bossTimeLeft.replace(/[^\-\d]/g, ''));
+            return Math.abs(aTime) - Math.abs(bTime);
+        });
+
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: results }));
+
+    } else if (req.url === '/rift' && req.method === 'GET') {
+        // Find rift servers endpoint  
+        const results = [];
+        const now = Math.floor(Date.now() / 1000);
+        
+        for (const [jobId, data] of Object.entries(db.servers)) {
+            const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+            
+            // Rift spawn logic: every 90 minutes after 10 minutes
+            const cycle = Math.floor((currentAge + 10) / 90);
+            if (cycle > 0) {
+                const spawnTime = cycle * 90;
+                const timeToRift = spawnTime - currentAge;
+                
+                // Only include servers within ±10 minutes of rift spawn
+                if (Math.abs(timeToRift) <= 10) {
+                    const hours = Math.floor(currentAge / 60);
+                    const minutes = currentAge % 60;
+                    
+                    results.push({
+                        jobId: jobId,
+                        serverTime: `${hours}h ${minutes}m`,
+                        riftTimeLeft: `${timeToRift > 0 ? '+' : ''}${timeToRift}m`,
+                        status: timeToRift <= 0 ? 'spawned' : 'coming'
+                    });
+                }
+            }
+        }
+        
+        // Sort by closest to rift time
+        results.sort((a, b) => {
+            const aTime = parseInt(a.riftTimeLeft.replace(/[^\-\d]/g, ''));
+            const bTime = parseInt(b.riftTimeLeft.replace(/[^\-\d]/g, ''));
+            return Math.abs(aTime) - Math.abs(bTime);
+        });
+
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true, data: results }));
+
     } else {
         res.end('Rift Brain Central is Running...');
     }
