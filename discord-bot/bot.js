@@ -1,4 +1,18 @@
 const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+
+// Fallback for fetch in older Node.js versions
+let fetch;
+try {
+    fetch = globalThis.fetch;
+    if (!fetch) {
+        const nodeFetch = require('node-fetch');
+        fetch = nodeFetch;
+    }
+} catch (error) {
+    console.warn('⚠️ Fetch not available, some features may not work');
+}
 
 // ==========================================
 // CONFIG - SECURE VERSION
@@ -24,6 +38,229 @@ if (CONFIG.ADMIN_USER_IDS.length === 0) {
 }
 
 // ==========================================
+// KEY SYSTEM CLASS
+// ==========================================
+class KeySystem {
+    constructor() {
+        this.keysFile = path.join(__dirname, 'keys.json');
+        this.keys = this.loadKeys();
+    }
+
+    loadKeys() {
+        try {
+            if (fs.existsSync(this.keysFile)) {
+                return JSON.parse(fs.readFileSync(this.keysFile, 'utf8'));
+            }
+        } catch (error) {
+            console.error('❌ Error loading keys:', error);
+        }
+        return {};
+    }
+
+    saveKeys() {
+        try {
+            fs.writeFileSync(this.keysFile, JSON.stringify(this.keys, null, 2));
+        } catch (error) {
+            console.error('❌ Error saving keys:', error);
+        }
+    }
+
+    createKey(type, value, maxUsers = null, usageLimit = null) {
+        const keyId = 'key_' + Math.random().toString(36).substring(2, 12);
+        const expireTime = type === 'time' ? Date.now() + (value * 60 * 60 * 1000) : null;
+        
+        this.keys[keyId] = {
+            type: type,
+            value: value,
+            used: 0,
+            created: Date.now(),
+            expire: expireTime,
+            maxUsers: maxUsers,
+            usageLimit: usageLimit,
+            userUsage: {}
+        };
+        
+        this.saveKeys();
+        return keyId;
+    }
+
+    isValidKey(keyId, userId) {
+        const key = this.keys[keyId];
+        if (!key) return { valid: false, reason: 'Key không tồn tại' };
+        
+        // Check expiration
+        if (key.expire && Date.now() > key.expire) {
+            return { valid: false, reason: 'Key đã hết hạn' };
+        }
+        
+        // Check usage limit
+        if (key.type === 'usage' && key.used >= key.value) {
+            return { valid: false, reason: 'Key đã hết lượt sử dụng' };
+        }
+        
+        // Check max users
+        if (key.maxUsers) {
+            const uniqueUsers = Object.keys(key.userUsage).length;
+            if (uniqueUsers >= key.maxUsers && !key.userUsage[userId]) {
+                return { valid: false, reason: `Key chỉ cho phép ${key.maxUsers} người dùng` };
+            }
+        }
+        
+        // Check per-user usage limit
+        if (key.usageLimit && key.userUsage[userId] >= key.usageLimit) {
+            return { valid: false, reason: `Bạn đã đạt giới hạn ${key.usageLimit} lượt cho key này` };
+        }
+        
+        return { valid: true };
+    }
+
+    useKey(keyId, userId) {
+        const validation = this.isValidKey(keyId, userId);
+        if (!validation.valid) return validation;
+        
+        this.keys[keyId].used++;
+        if (!this.keys[keyId].userUsage[userId]) {
+            this.keys[keyId].userUsage[userId] = 0;
+        }
+        this.keys[keyId].userUsage[userId]++;
+        
+        this.saveKeys();
+        return { valid: true };
+    }
+
+    getKeyInfo(keyId) {
+        const key = this.keys[keyId];
+        if (!key) return null;
+        
+        const uniqueUsers = Object.keys(key.userUsage).length;
+        return {
+            ...key,
+            uniqueUsers: uniqueUsers,
+            remaining: key.type === 'usage' ? (key.value - key.used) : null,
+            timeLeft: key.expire ? Math.max(0, key.expire - Date.now()) : null
+        };
+    }
+}
+
+// ==========================================
+// USAGE LOGGER CLASS
+// ==========================================
+class UsageLogger {
+    constructor() {
+        this.logsFile = path.join(__dirname, 'usage_logs.json');
+        this.logs = this.loadLogs();
+    }
+
+    loadLogs() {
+        try {
+            if (fs.existsSync(this.logsFile)) {
+                return JSON.parse(fs.readFileSync(this.logsFile, 'utf8'));
+            }
+        } catch (error) {
+            console.error('❌ Error loading logs:', error);
+        }
+        return [];
+    }
+
+    saveLogs() {
+        try {
+            // Keep only last 1000 logs
+            if (this.logs.length > 1000) {
+                this.logs = this.logs.slice(-1000);
+            }
+            fs.writeFileSync(this.logsFile, JSON.stringify(this.logs, null, 2));
+        } catch (error) {
+            console.error('❌ Error saving logs:', error);
+        }
+    }
+
+    logUsage(userId, username, keyId, command, result) {
+        this.logs.push({
+            timestamp: Date.now(),
+            userId: userId,
+            username: username,
+            keyId: keyId,
+            command: command,
+            result: result,
+            success: result !== 'ERROR'
+        });
+        
+        this.saveLogs();
+    }
+
+    getStats() {
+        const totalCommands = this.logs.length;
+        const uniqueUsers = [...new Set(this.logs.map(log => log.userId))].length;
+        const commandCounts = {};
+        
+        this.logs.forEach(log => {
+            commandCounts[log.command] = (commandCounts[log.command] || 0) + 1;
+        });
+        
+        return {
+            totalCommands,
+            uniqueUsers,
+            commandCounts,
+            recentLogs: this.logs.slice(-10)
+        };
+    }
+}
+
+// ==========================================
+// DATABASE API CLASS
+// ==========================================
+class DatabaseAPI {
+    constructor(brainUrl) {
+        this.brainUrl = brainUrl;
+    }
+
+    async makeRequest(endpoint, params = {}) {
+        try {
+            const url = new URL(endpoint, this.brainUrl);
+            Object.keys(params).forEach(key => {
+                if (params[key] !== undefined) {
+                    url.searchParams.append(key, params[key]);
+                }
+            });
+
+            const response = await fetch(url.toString());
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`❌ API Error (${endpoint}):`, error);
+            throw error;
+        }
+    }
+
+    async searchPlayer(playerName) {
+        return await this.makeRequest('/player', { name: playerName });
+    }
+
+    async searchGang(gangName) {
+        return await this.makeRequest('/gang', { name: gangName });
+    }
+
+    async getBossServers() {
+        return await this.makeRequest('/boss');
+    }
+
+    async getRiftServers() {
+        return await this.makeRequest('/rift');
+    }
+}
+
+// ==========================================
+// INITIALIZE SYSTEMS
+// ==========================================
+const keySystem = new KeySystem();
+const usageLogger = new UsageLogger();
+const databaseAPI = new DatabaseAPI(CONFIG.BRAIN_URL);
+
+// ==========================================
 // BOT SETUP
 // ==========================================
 const client = new Client({
@@ -36,7 +273,7 @@ function isAdmin(userId) {
 }
 
 // ==========================================
-// SLASH COMMANDS
+// SLASH COMMANDS - FULL VERSION
 // ==========================================
 const commands = [
     new SlashCommandBuilder()
@@ -44,15 +281,81 @@ const commands = [
         .setDescription('Test command để kiểm tra bot hoạt động'),
 
     new SlashCommandBuilder()
+        .setName('username')
+        .setDescription('Tìm kiếm player trong database')
+        .addStringOption(option =>
+            option.setName('player')
+                .setDescription('Tên player cần tìm')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('key')
+                .setDescription('Key để sử dụng lệnh')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('gang')
+        .setDescription('Tìm kiếm gang trong database')
+        .addStringOption(option =>
+            option.setName('name')
+                .setDescription('Tên gang cần tìm')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('key')
+                .setDescription('Key để sử dụng lệnh')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('boss')
+        .setDescription('Tìm server có Boss sắp spawn')
+        .addStringOption(option =>
+            option.setName('key')
+                .setDescription('Key để sử dụng lệnh')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('rift')
+        .setDescription('Tìm server có Rift sắp spawn')
+        .addStringOption(option =>
+            option.setName('key')
+                .setDescription('Key để sử dụng lệnh')
+                .setRequired(true)),
+
+    // Admin commands
+    new SlashCommandBuilder()
         .setName('createkey')
-        .setDescription('[ADMIN] Tạo key mới - TEST VERSION')
+        .setDescription('[ADMIN] Tạo key mới')
         .addStringOption(option =>
             option.setName('type')
                 .setDescription('Loại key')
                 .setRequired(true)
                 .addChoices(
-                    { name: 'Test Key', value: 'test' }
-                )),
+                    { name: 'Theo số lần sử dụng', value: 'usage' },
+                    { name: 'Theo thời gian', value: 'time' }
+                ))
+        .addIntegerOption(option =>
+            option.setName('value')
+                .setDescription('Số lượt (usage) hoặc giờ (time)')
+                .setRequired(true))
+        .addIntegerOption(option =>
+            option.setName('maxusers')
+                .setDescription('Số người tối đa có thể dùng key')
+                .setRequired(false))
+        .addIntegerOption(option =>
+            option.setName('usagelimit')
+                .setDescription('Giới hạn lượt mỗi user (0 = không giới hạn)')
+                .setRequired(false)),
+
+    new SlashCommandBuilder()
+        .setName('keyusage')
+        .setDescription('Xem usage của key hiện tại')
+        .addStringOption(option =>
+            option.setName('key')
+                .setDescription('Key để kiểm tra usage')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('stats')
+        .setDescription('[ADMIN] Xem thống kê sử dụng bot'),
 ];
 
 // ==========================================
@@ -63,8 +366,9 @@ client.on('interactionCreate', async (interaction) => {
 
     const { commandName } = interaction;
     const userId = interaction.user.id;
+    const username = interaction.user.username;
 
-    console.log(`[DISCORD] Command: /${commandName} by ${interaction.user.username} (${userId})`);
+    console.log(`[DISCORD] Command: /${commandName} by ${username} (${userId})`);
 
     try {
         // Defer reply to prevent timeout
@@ -76,11 +380,166 @@ client.on('interactionCreate', async (interaction) => {
                 .setColor(0x00ff00)
                 .addFields(
                     { name: 'Status', value: '✅ Bot hoạt động bình thường', inline: true },
-                    { name: 'User', value: interaction.user.username, inline: true },
-                    { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true }
+                    { name: 'User', value: username, inline: true },
+                    { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true },
+                    { name: 'Brain URL', value: CONFIG.BRAIN_URL, inline: false }
                 );
 
             return await interaction.editReply({ embeds: [embed] });
+        }
+
+        // Commands that require keys
+        const keyCommands = ['username', 'gang', 'boss', 'rift'];
+        if (keyCommands.includes(commandName)) {
+            const key = interaction.options.getString('key');
+            
+            // Validate key
+            const validation = keySystem.isValidKey(key, userId);
+            if (!validation.valid) {
+                const embed = new EmbedBuilder()
+                    .setTitle('❌ Key không hợp lệ')
+                    .setColor(0xff0000)
+                    .setDescription(validation.reason);
+                
+                return await interaction.editReply({ embeds: [embed] });
+            }
+
+            // Use key
+            keySystem.useKey(key, userId);
+
+            try {
+                let result = null;
+                let embed = null;
+
+                if (commandName === 'username') {
+                    const playerName = interaction.options.getString('player');
+                    result = await databaseAPI.searchPlayer(playerName);
+                    
+                    if (result.success && result.data.length > 0) {
+                        embed = new EmbedBuilder()
+                            .setTitle(`🎮 Tìm thấy player: ${playerName}`)
+                            .setColor(0x00ff00);
+                        
+                        result.data.slice(0, 10).forEach((player, index) => {
+                            const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${player.jobId}`;
+                            embed.addFields({
+                                name: `#${index + 1} - Server ${player.jobId}`,
+                                value: `👤 **${player.displayName}**\n💰 Cash: $${player.leaderstats?.Cash?.toLocaleString() || 'N/A'}\n⭐ Level: ${player.leaderstats?.Level || 'N/A'}\n🔗 [Join Server](${fishstrapLink})`,
+                                inline: true
+                            });
+                        });
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} results`);
+                    } else {
+                        embed = new EmbedBuilder()
+                            .setTitle('🔍 Không tìm thấy')
+                            .setColor(0xffa500)
+                            .setDescription(`Không tìm thấy player có tên: **${playerName}**`);
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, 'No results');
+                    }
+                }
+
+                else if (commandName === 'gang') {
+                    const gangName = interaction.options.getString('name');
+                    result = await databaseAPI.searchGang(gangName);
+                    
+                    if (result.success && result.data.length > 0) {
+                        embed = new EmbedBuilder()
+                            .setTitle(`⚔️ Tìm thấy gang: ${gangName}`)
+                            .setColor(0x00ff00);
+                        
+                        result.data.slice(0, 10).forEach((gang, index) => {
+                            const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${gang.jobId}`;
+                            embed.addFields({
+                                name: `#${index + 1} - Server ${gang.jobId}`,
+                                value: `⚔️ **${gang.Name}**\n👥 Members: ${gang.MemberCount || 'N/A'}\n👑 Owner: ${gang.Owner || 'N/A'}\n🔗 [Join Server](${fishstrapLink})`,
+                                inline: true
+                            });
+                        });
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} results`);
+                    } else {
+                        embed = new EmbedBuilder()
+                            .setTitle('🔍 Không tìm thấy')
+                            .setColor(0xffa500)
+                            .setDescription(`Không tìm thấy gang có tên: **${gangName}**`);
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, 'No results');
+                    }
+                }
+
+                else if (commandName === 'boss') {
+                    result = await databaseAPI.getBossServers();
+                    
+                    if (result.success && result.data.length > 0) {
+                        embed = new EmbedBuilder()
+                            .setTitle('👹 Boss Servers Sắp Spawn')
+                            .setColor(0xff4500);
+                        
+                        result.data.slice(0, 15).forEach((server, index) => {
+                            const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${server.jobId}`;
+                            const timeLeft = server.bossTimeLeft || 'N/A';
+                            embed.addFields({
+                                name: `#${index + 1} - Server ${server.jobId}`,
+                                value: `⏰ Time Left: ${timeLeft}\n🕐 Server Time: ${server.serverTime || 'N/A'}\n🔗 [Join Server](${fishstrapLink})`,
+                                inline: true
+                            });
+                        });
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} boss servers`);
+                    } else {
+                        embed = new EmbedBuilder()
+                            .setTitle('👹 Không có Boss Server')
+                            .setColor(0xffa500)
+                            .setDescription('Hiện tại không có server nào có Boss sắp spawn');
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, 'No boss servers');
+                    }
+                }
+
+                else if (commandName === 'rift') {
+                    result = await databaseAPI.getRiftServers();
+                    
+                    if (result.success && result.data.length > 0) {
+                        embed = new EmbedBuilder()
+                            .setTitle('🌀 Rift Servers Sắp Spawn')
+                            .setColor(0x8a2be2);
+                        
+                        result.data.slice(0, 15).forEach((server, index) => {
+                            const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${server.jobId}`;
+                            const timeLeft = server.riftTimeLeft || 'N/A';
+                            embed.addFields({
+                                name: `#${index + 1} - Server ${server.jobId}`,
+                                value: `⏰ Time Left: ${timeLeft}\n🕐 Server Time: ${server.serverTime || 'N/A'}\n🔗 [Join Server](${fishstrapLink})`,
+                                inline: true
+                            });
+                        });
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} rift servers`);
+                    } else {
+                        embed = new EmbedBuilder()
+                            .setTitle('🌀 Không có Rift Server')
+                            .setColor(0xffa500)
+                            .setDescription('Hiện tại không có server nào có Rift sắp spawn');
+                        
+                        usageLogger.logUsage(userId, username, key, commandName, 'No rift servers');
+                    }
+                }
+
+                return await interaction.editReply({ embeds: [embed] });
+
+            } catch (apiError) {
+                console.error(`❌ API Error for ${commandName}:`, apiError);
+                
+                const errorEmbed = new EmbedBuilder()
+                    .setTitle('❌ Lỗi kết nối')
+                    .setColor(0xff0000)
+                    .setDescription('Không thể kết nối tới database. Vui lòng thử lại sau.');
+                
+                usageLogger.logUsage(userId, username, key, commandName, 'ERROR');
+                return await interaction.editReply({ embeds: [errorEmbed] });
+            }
         }
 
         if (commandName === 'createkey') {
@@ -88,15 +547,82 @@ client.on('interactionCreate', async (interaction) => {
                 return await interaction.editReply({ content: '❌ Chỉ admin mới có thể sử dụng lệnh này!' });
             }
 
-            const keyId = 'test_' + Math.random().toString(36).substr(2, 8);
+            const type = interaction.options.getString('type');
+            const value = interaction.options.getInteger('value');
+            const maxUsers = interaction.options.getInteger('maxusers');
+            const usageLimit = interaction.options.getInteger('usagelimit');
+
+            const keyId = keySystem.createKey(type, value, maxUsers, usageLimit);
             
             const embed = new EmbedBuilder()
-                .setTitle('🔑 Test Key Created')
+                .setTitle('🔑 Key đã được tạo thành công!')
                 .setColor(0x00ff00)
                 .addFields(
                     { name: 'Key ID', value: `\`${keyId}\``, inline: false },
-                    { name: 'Type', value: 'Test Key', inline: true },
-                    { name: 'Created By', value: interaction.user.username, inline: true }
+                    { name: 'Loại', value: type === 'usage' ? 'Theo lượt sử dụng' : 'Theo thời gian', inline: true },
+                    { name: 'Giá trị', value: type === 'usage' ? `${value} lượt` : `${value} giờ`, inline: true },
+                    { name: 'Người tạo', value: username, inline: true }
+                );
+
+            if (maxUsers) {
+                embed.addFields({ name: 'Max Users', value: `${maxUsers} người`, inline: true });
+            }
+            if (usageLimit) {
+                embed.addFields({ name: 'Usage Limit/User', value: `${usageLimit} lượt`, inline: true });
+            }
+
+            return await interaction.editReply({ embeds: [embed] });
+        }
+
+        if (commandName === 'keyusage') {
+            const key = interaction.options.getString('key');
+            const keyInfo = keySystem.getKeyInfo(key);
+            
+            if (!keyInfo) {
+                return await interaction.editReply({ content: '❌ Key không tồn tại!' });
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle('📊 Thông tin Key')
+                .setColor(0x0099ff)
+                .addFields(
+                    { name: 'Key ID', value: `\`${key}\``, inline: false },
+                    { name: 'Loại', value: keyInfo.type === 'usage' ? 'Theo lượt' : 'Theo thời gian', inline: true },
+                    { name: 'Đã sử dụng', value: `${keyInfo.used}/${keyInfo.value}`, inline: true },
+                    { name: 'Số người dùng', value: `${keyInfo.uniqueUsers}`, inline: true }
+                );
+
+            if (keyInfo.type === 'usage') {
+                embed.addFields({ name: 'Còn lại', value: `${keyInfo.remaining} lượt`, inline: true });
+            }
+
+            if (keyInfo.timeLeft !== null) {
+                const hours = Math.floor(keyInfo.timeLeft / (1000 * 60 * 60));
+                const minutes = Math.floor((keyInfo.timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+                embed.addFields({ name: 'Thời gian còn lại', value: `${hours}h ${minutes}m`, inline: true });
+            }
+
+            if (keyInfo.userUsage[userId]) {
+                embed.addFields({ name: 'Lượt của bạn', value: `${keyInfo.userUsage[userId]}`, inline: true });
+            }
+
+            return await interaction.editReply({ embeds: [embed] });
+        }
+
+        if (commandName === 'stats') {
+            if (!isAdmin(userId)) {
+                return await interaction.editReply({ content: '❌ Chỉ admin mới có thể sử dụng lệnh này!' });
+            }
+
+            const stats = usageLogger.getStats();
+            
+            const embed = new EmbedBuilder()
+                .setTitle('📈 Thống kê Bot')
+                .setColor(0x9932cc)
+                .addFields(
+                    { name: 'Tổng lệnh', value: `${stats.totalCommands}`, inline: true },
+                    { name: 'Người dùng', value: `${stats.uniqueUsers}`, inline: true },
+                    { name: 'Commands', value: Object.entries(stats.commandCounts).map(([cmd, count]) => `${cmd}: ${count}`).join('\n') || 'Chưa có', inline: false }
                 );
 
             return await interaction.editReply({ embeds: [embed] });
