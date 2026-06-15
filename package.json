@@ -1,0 +1,32 @@
+{
+  "name": "asura-scanner-system-v2",
+  "version": "2.0.0",
+  "description": "Advanced Asura game server scanner with thread-safe API and Discord bot integration",
+  "main": "rift.js",
+  "scripts": {
+    "start": "node rift.js",
+    "start-combined": "node combined-server.js",
+    "start-api": "node rift.js",
+    "start-bot": "cd discord-bot && npm start",
+    "dev": "nodemon rift.js",
+    "scan": "node scan_jobid/jobid.js",
+    "bot": "cd discord-bot && npm start",
+    "bot-dev": "cd discord-bot && npm run dev",
+    "install-all": "npm install && cd discord-bot && npm install",
+    "build": "echo 'Build completed'",
+    "postinstall": "cd discord-bot && npm install"
+  },
+  "dependencies": {
+    "axios": "^1.16.0",
+    "discord.js": "^14.14.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": ["asura", "roblox", "scanner", "automation", "discord", "bot"],
+  "author": "Asura Community",
+  "license": "MIT"
+}

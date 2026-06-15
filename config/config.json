@@ -1,0 +1,18 @@
+{
+  "development": {
+    "BRAIN_URL": "http://localhost:3000",
+    "PLACE_ID": "13358463560",
+    "FISHSTRAP_BASE": "https://www.fishstrap.app/v1/joingame?placeId=13358463560&gameInstanceId=",
+    "AUTO_SCAN_INTERVAL": 300000,
+    "MAX_THREADS": 10,
+    "CLEANUP_INTERVAL": 300000
+  },
+  "production": {
+    "BRAIN_URL": "http://localhost:3000",
+    "PLACE_ID": "13358463560", 
+    "FISHSTRAP_BASE": "https://www.fishstrap.app/v1/joingame?placeId=13358463560&gameInstanceId=",
+    "AUTO_SCAN_INTERVAL": 600000,
+    "MAX_THREADS": 20,
+    "CLEANUP_INTERVAL": 300000
+  }
+}
