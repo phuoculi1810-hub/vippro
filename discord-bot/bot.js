@@ -420,8 +420,7 @@ client.on('interactionCreate', async (interaction) => {
                 .addFields(
                     { name: 'Status', value: '✅ Bot hoạt động bình thường', inline: true },
                     { name: 'User', value: username, inline: true },
-                    { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true },
-                    { name: 'Brain URL', value: CONFIG.BRAIN_URL, inline: false }
+                    { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true }
                 );
 
             return await interaction.editReply({ embeds: [embed] });
