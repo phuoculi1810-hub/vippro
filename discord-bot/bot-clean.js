@@ -1,4 +1,7 @@
 const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
 
 // ==========================================
 // CONFIG - SECURE VERSION
@@ -24,7 +27,7 @@ if (CONFIG.ADMIN_USER_IDS.length === 0) {
 }
 
 // ==========================================
-// BOT SETUP
+// SIMPLE BOT SETUP
 // ==========================================
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
@@ -36,7 +39,7 @@ function isAdmin(userId) {
 }
 
 // ==========================================
-// SLASH COMMANDS
+// SIMPLE SLASH COMMANDS
 // ==========================================
 const commands = [
     new SlashCommandBuilder()
@@ -140,7 +143,7 @@ client.on('warn', (warning) => {
     console.warn('⚠️ Discord client warning:', warning);
 });
 
-// Login
+// Validate config before login
 console.log('🤖 Đang khởi động Discord Bot...');
 console.log('🔑 Token validation: ✅ PASSED');
 console.log(`👑 Admin IDs: ${CONFIG.ADMIN_USER_IDS.join(', ')}`);
