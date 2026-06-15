@@ -738,6 +738,47 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
+        if (commandName === 'scan') {
+            if (!isAdmin(userId)) {
+                return await interaction.editReply({ content: '❌ Chỉ admin mới có thể sử dụng lệnh này!' });
+            }
+
+            try {
+                const result = await databaseAPI.scanJobIds();
+                
+                if (result.success) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('🔍 JobId Scan Completed')
+                        .setColor(0x00ff00)
+                        .addFields(
+                            { name: 'Status', value: 'Success', inline: true },
+                            { name: 'Total Scanned', value: `${result.totalScanned || 0}`, inline: true },
+                            { name: 'New JobIds', value: `${result.newJobIds || 0}`, inline: true },
+                            { name: 'Available Count', value: `${result.availableCount || 0}`, inline: true },
+                            { name: 'Executed By', value: username, inline: true },
+                            { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true }
+                        );
+
+                    usageLogger.logUsage(userId, username, 'scan', 'Success');
+                    return await interaction.editReply({ embeds: [embed] });
+                } else {
+                    usageLogger.logUsage(userId, username, 'scan', 'Failed');
+                    return await interaction.editReply({ content: `❌ Scan failed: ${result.error || 'Unknown error'}` });
+                }
+
+            } catch (apiError) {
+                console.error(`❌ Scan API Error:`, apiError);
+                
+                const errorEmbed = new EmbedBuilder()
+                    .setTitle('❌ Scan Error')
+                    .setColor(0xff0000)
+                    .setDescription(`API Error: ${apiError.message}`);
+                
+                usageLogger.logUsage(userId, username, 'scan', 'ERROR');
+                return await interaction.editReply({ embeds: [errorEmbed] });
+            }
+        }
+
     } catch (error) {
         console.error('❌ Command error:', error);
         
