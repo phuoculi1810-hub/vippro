@@ -478,37 +478,56 @@ client.on('interactionCreate', async (interaction) => {
                     result = await databaseAPI.searchPlayer(playerName);
                     
                     if (result.success && result.data.length > 0) {
+                        // Group results by player name (displayName)
+                        const playerGroups = {};
+                        result.data.forEach(player => {
+                            const key = player.displayName || player.name;
+                            if (!playerGroups[key]) {
+                                playerGroups[key] = [];
+                            }
+                            playerGroups[key].push(player);
+                        });
+                        
                         embed = new EmbedBuilder()
                             .setTitle(`🎮 Tìm thấy player: ${playerName}`)
                             .setColor(0x00ff00)
-                            .setDescription(`Tìm thấy **${result.data.length}** server(s)`);
+                            .setDescription(`Tìm thấy **${Object.keys(playerGroups).length}** player(s) với **${result.data.length}** server(s)`);
                         
-                        result.data.slice(0, 15).forEach((player, index) => {
-                            const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${player.jobId}`;
+                        // Display each player with all their servers
+                        Object.entries(playerGroups).forEach(([displayName, servers]) => {
+                            // Sort servers by most recent first
+                            servers.sort((a, b) => b.timestamp - a.timestamp);
                             
-                            // Calculate time ago
-                            const now = Math.floor(Date.now() / 1000);
-                            const timeDiff = now - player.timestamp;
-                            const minutesAgo = Math.floor(timeDiff / 60);
-                            const hoursAgo = Math.floor(minutesAgo / 60);
+                            let serverList = '';
+                            servers.slice(0, 10).forEach((server, index) => { // Limit 10 servers per player
+                                const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${server.jobId}`;
+                                
+                                // Calculate time ago
+                                const now = Math.floor(Date.now() / 1000);
+                                const timeDiff = now - server.timestamp;
+                                const minutesAgo = Math.floor(timeDiff / 60);
+                                
+                                let timeText = '';
+                                if (minutesAgo >= 60) {
+                                    const hoursAgo = Math.floor(minutesAgo / 60);
+                                    timeText = `${hoursAgo} giờ ${minutesAgo % 60} phút trước`;
+                                } else {
+                                    timeText = `${minutesAgo} phút trước`;
+                                }
+                                
+                                serverList += `• Server \`${server.jobId.substring(0, 8)}...\` - 🕒 ${timeText} [🔗 Join](${fishstrapLink})\n`;
+                            });
                             
-                            let timeText = '';
-                            if (hoursAgo > 0) {
-                                timeText = `${hoursAgo}h ${minutesAgo % 60}m trước`;
-                            } else {
-                                timeText = `${minutesAgo}m trước`;
+                            if (servers.length > 10) {
+                                serverList += `• _và ${servers.length - 10} server khác..._\n`;
                             }
                             
                             embed.addFields({
-                                name: `Server ${index + 1}`,
-                                value: `👤 **${player.displayName}**\n🆔 ${player.jobId.substring(0, 8)}...\n🕒 ${timeText}\n🔗 [Join](${fishstrapLink})`,
-                                inline: true
+                                name: `👤 ${displayName}`,
+                                value: serverList || 'Không có server nào',
+                                inline: false
                             });
                         });
-                        
-                        if (result.data.length > 15) {
-                            embed.setFooter({ text: `Hiển thị 15/${result.data.length} servers` });
-                        }
                         
                         usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} results`);
                     } else {
@@ -526,37 +545,55 @@ client.on('interactionCreate', async (interaction) => {
                     result = await databaseAPI.searchGang(gangName);
                     
                     if (result.success && result.data.length > 0) {
+                        // Group results by gang name
+                        const gangGroups = {};
+                        result.data.forEach(gang => {
+                            if (!gangGroups[gang.Name]) {
+                                gangGroups[gang.Name] = [];
+                            }
+                            gangGroups[gang.Name].push(gang);
+                        });
+                        
                         embed = new EmbedBuilder()
                             .setTitle(`⚔️ Tìm thấy gang: ${gangName}`)
                             .setColor(0x00ff00)
-                            .setDescription(`Tìm thấy **${result.data.length}** server(s)`);
+                            .setDescription(`Tìm thấy **${Object.keys(gangGroups).length}** gang(s) với **${result.data.length}** server(s)`);
                         
-                        result.data.slice(0, 15).forEach((gang, index) => {
-                            const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${gang.jobId}`;
+                        // Display each gang with all its servers
+                        Object.entries(gangGroups).forEach(([name, servers]) => {
+                            // Sort servers by most recent first
+                            servers.sort((a, b) => b.timestamp - a.timestamp);
                             
-                            // Calculate time ago
-                            const now = Math.floor(Date.now() / 1000);
-                            const timeDiff = now - gang.timestamp;
-                            const minutesAgo = Math.floor(timeDiff / 60);
-                            const hoursAgo = Math.floor(minutesAgo / 60);
+                            let serverList = '';
+                            servers.slice(0, 10).forEach((server, index) => { // Limit 10 servers per gang
+                                const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${server.jobId}`;
+                                
+                                // Calculate time ago
+                                const now = Math.floor(Date.now() / 1000);
+                                const timeDiff = now - server.timestamp;
+                                const minutesAgo = Math.floor(timeDiff / 60);
+                                
+                                let timeText = '';
+                                if (minutesAgo >= 60) {
+                                    const hoursAgo = Math.floor(minutesAgo / 60);
+                                    timeText = `${hoursAgo} giờ ${minutesAgo % 60} phút trước`;
+                                } else {
+                                    timeText = `${minutesAgo} phút trước`;
+                                }
+                                
+                                serverList += `• Server \`${server.jobId.substring(0, 8)}...\` - 🕒 ${timeText} [🔗 Join](${fishstrapLink})\n`;
+                            });
                             
-                            let timeText = '';
-                            if (hoursAgo > 0) {
-                                timeText = `${hoursAgo}h ${minutesAgo % 60}m trước`;
-                            } else {
-                                timeText = `${minutesAgo}m trước`;
+                            if (servers.length > 10) {
+                                serverList += `• _và ${servers.length - 10} server khác..._\n`;
                             }
                             
                             embed.addFields({
-                                name: `Server ${index + 1}`,
-                                value: `⚔️ **${gang.Name}**\n🆔 ${gang.jobId.substring(0, 8)}...\n🕒 ${timeText}\n🔗 [Join](${fishstrapLink})`,
-                                inline: true
+                                name: `🏴 ${name}`,
+                                value: serverList || 'Không có server nào',
+                                inline: false
                             });
                         });
-                        
-                        if (result.data.length > 15) {
-                            embed.setFooter({ text: `Hiển thị 15/${result.data.length} servers` });
-                        }
                         
                         usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} results`);
                     } else {

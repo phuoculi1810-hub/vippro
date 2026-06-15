@@ -32,15 +32,21 @@ local currentJobId = game.JobId
 local stopHop = false
 local nextGui = nil
 
-warn("🚀 ASURA SCANNER V2: OFFLINE MODE ENABLED")
+warn("🚀 ASURA SCANNER V2: INITIALIZING")
 print("👤 Người chơi: " .. LocalPlayer.Name)
 print("🔗 Thread ID: " .. CONFIG.THREAD_ID)
-print("📡 Mode: OFFLINE - No HTTP required")
-print("� This version will scan and display data for manual copy")
+print("🌍 Current JobId: " .. currentJobId:sub(1, 8) .. "...")
+print("📡 Brain URL: " .. CONFIG.BRAIN_URL)
 
--- Skip HTTP tests in offline mode
-print("⚠️ Skipping HTTP tests (OFFLINE MODE)")
-print("✅ Ready to scan server data!")
+-- Test HTTP connection
+print("🔍 Testing HTTP connection...")
+local testResponse = brainRequest("/status", "GET")
+if testResponse then
+    print("✅ HTTP connection successful!")
+    print("📡 Server response: " .. (testResponse.StatusCode or "Unknown"))
+else
+    warn("⚠️ HTTP connection failed - continuing anyway...")
+end
 
 -- ==========================================
 -- SERVER TIME READER (từ ServerTimeReader.lua)
@@ -113,6 +119,11 @@ local function brainRequest(path, method, body)
     if ok then return response end
     return nil
 end
+
+-- ==========================================
+-- FORWARD DECLARATIONS (to fix function scope issues)
+-- ==========================================
+local hopToNext -- Forward declaration
 
 -- ==========================================
 -- SCANNER FUNCTIONS
@@ -262,8 +273,40 @@ local function joinServer(jobId)
         -- Báo server lỗi và thử lấy server khác
         brainRequest("/report-full", "POST", { jobId = jobId })
         task.wait(2)
-        hopToNext() -- Retry với server khác
+        if hopToNext then -- Check if function exists
+            hopToNext() -- Retry với server khác
+        end
     end
+end
+
+-- Print collected data for manual copy (OFFLINE MODE)
+local function printCollectedData()
+    print("\n" .. string.rep("=", 50))
+    print("📋 COLLECTED DATA FOR MANUAL COPY")
+    print(string.rep("=", 50))
+    
+    -- Scan players again for final output
+    local players = scanAllPlayers()
+    if #players > 0 then
+        print("\n👥 PLAYERS FOUND:")
+        for _, p in ipairs(players) do
+            print("  " .. p.name .. " | " .. p.displayName .. " | " .. p.userId)
+        end
+    end
+    
+    -- Scan gangs again for final output
+    local gangs = scanAllGangs()
+    if #gangs > 0 then
+        print("\n🏴 GANGS FOUND:")
+        for _, g in ipairs(gangs) do
+            print("  " .. g.name)
+        end
+    end
+    
+    print("\n🌍 SERVER: " .. currentJobId)
+    local secs, timeStr = getServerAge()
+    print("🕒 AGE: " .. timeStr)
+    print(string.rep("=", 50))
 end
 
 -- ==========================================
@@ -334,12 +377,16 @@ local function showNextButton()
         -- Đánh dấu hoàn thành và lấy server mới
         markJobCompleted("manual_next")
         task.wait(1)
-        hopToNext()
+        if hopToNext then -- Safety check
+            hopToNext()
+        else
+            warn("❌ hopToNext function not available!")
+        end
     end)
 end
 
 -- Hop đến server tiếp theo
-function hopToNext()
+function hopToNext() -- Make it global function
     if stopHop then
         print("⏸ Server hopping đã bị dừng")
         return
@@ -420,13 +467,15 @@ task.spawn(function()
     -- Báo cáo về Brain Central
     if #allPlayers > 0 then
         reportAllPlayers(allPlayers)
+        print("📡 Đã gửi " .. #allPlayers .. " players về API")
     end
     
     if #allGangs > 0 then
         reportAllGangs(allGangs)
+        print("📡 Đã gửi " .. #allGangs .. " gangs về API")
     end
     
-    -- Print collected data for manual copy
+    -- Print summary data
     printCollectedData()
     
     -- Check Boss/Rift
@@ -441,8 +490,8 @@ task.spawn(function()
         local reason = ""
         if hasBoss then reason = reason .. "Boss " end
         if hasRift then reason = reason .. "Rift " end
-        if #allPlayers >= 15 then reason = reason .. "ManyPlayers " end
-        if #allGangs >= 3 then reason = reason .. "ManyGangs " end
+        if #allPlayers >= 15 then reason = reason .. "ManyPlayers(" .. #allPlayers .. ") " end
+        if #allGangs >= 3 then reason = reason .. "ManyGangs(" .. #allGangs .. ") " end
         
         print("🛑 DỪNG HOP - Lý do: " .. reason)
         markJobCompleted("interesting_server")
@@ -478,17 +527,19 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, gameProce
         print("Thread: " .. CONFIG.THREAD_ID)
     elseif input.KeyCode == Enum.KeyCode.F2 then
         -- F2: Hop ngay
-        if not stopHop then
+        if not stopHop and hopToNext then
             print("🚀 Manual hop...")
             markJobCompleted("manual_hop")
             task.wait(0.5)
             hopToNext()
+        else
+            warn("⚠️ Cannot hop - either stopped or function unavailable")
         end
     elseif input.KeyCode == Enum.KeyCode.F3 then
         -- F3: Dừng/Tiếp tục hop
         stopHop = not stopHop
         print(stopHop and "⏸ Đã dừng auto hop" or "▶ Đã tiếp tục auto hop")
-        if not stopHop then
+        if not stopHop and hopToNext then
             hopToNext()
         end
     end
