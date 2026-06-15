@@ -33,20 +33,11 @@ local stopHop = false
 local nextGui = nil
 
 warn("🚀 ASURA SCANNER V2: INITIALIZING")
+warn("📌 VERSION: 2.1.0 - FIXED FUNCTION ORDERING - " .. os.date("%H:%M:%S"))
 print("👤 Người chơi: " .. LocalPlayer.Name)
 print("🔗 Thread ID: " .. CONFIG.THREAD_ID)
 print("🌍 Current JobId: " .. currentJobId:sub(1, 8) .. "...")
 print("📡 Brain URL: " .. CONFIG.BRAIN_URL)
-
--- Test HTTP connection
-print("🔍 Testing HTTP connection...")
-local testResponse = brainRequest("/status", "GET")
-if testResponse then
-    print("✅ HTTP connection successful!")
-    print("📡 Server response: " .. (testResponse.StatusCode or "Unknown"))
-else
-    warn("⚠️ HTTP connection failed - continuing anyway...")
-end
 
 -- ==========================================
 -- SERVER TIME READER (từ ServerTimeReader.lua)
@@ -102,12 +93,31 @@ end
 -- HTTP REQUESTS - EXACT COPY FROM WORKING VERSION
 -- ==========================================
 local function getRequest()
-    return (syn and syn.request) or (http and http.request) or http_request or request
+    local requestFunc = (syn and syn.request) or (http and http.request) or http_request or request
+    print("🔍 DEBUG - getRequest() result: " .. tostring(requestFunc))
+    if requestFunc then
+        print("✅ HTTP request function available: " .. tostring(type(requestFunc)))
+    else
+        warn("❌ No HTTP request function found!")
+        warn("  - syn: " .. tostring(syn))
+        warn("  - syn.request: " .. tostring(syn and syn.request))
+        warn("  - http: " .. tostring(http))
+        warn("  - http.request: " .. tostring(http and http.request))
+        warn("  - http_request: " .. tostring(http_request))
+        warn("  - request: " .. tostring(request))
+    end
+    return requestFunc
 end
 
 local function brainRequest(path, method, body)
+    print("🔍 DEBUG - brainRequest called with path: " .. tostring(path))
     local req = getRequest()
-    if not req then return nil end
+    if not req then 
+        warn("❌ No HTTP request function available!")
+        return nil 
+    end
+    
+    print("🔍 DEBUG - HTTP request function found, making request...")
     local ok, response = pcall(function()
         return req({
             Url = CONFIG.BRAIN_URL .. path,
@@ -116,8 +126,14 @@ local function brainRequest(path, method, body)
             Body = body and HttpService:JSONEncode(body) or nil
         })
     end)
-    if ok then return response end
-    return nil
+    
+    if ok then 
+        print("🔍 DEBUG - Request successful")
+        return response 
+    else
+        warn("❌ Request failed: " .. tostring(response))
+        return nil
+    end
 end
 
 -- ==========================================
@@ -224,22 +240,42 @@ end
 
 -- Đánh dấu JobId hoàn thành
 local function markJobCompleted(result)
+    print("📝 DEBUG - markJobCompleted() called with result: " .. tostring(result))
     print("📝 Marking JobId completed: " .. tostring(result))
-    local response = brainRequest("/complete", "POST", {
-        jobId = currentJobId,
-        result = result or "completed"
-    })
-    if response then
+    
+    local success, response = pcall(function()
+        return brainRequest("/complete", "POST", {
+            jobId = currentJobId,
+            result = result or "completed"
+        })
+    end)
+    
+    if success and response then
         print("✅ JobId marked as completed")
     else
-        print("❌ Failed to mark JobId as completed")
+        warn("❌ Failed to mark JobId as completed: " .. tostring(response))
     end
 end
 
 -- Lấy JobId tiếp theo từ API
 local function getNextJobId()
     print("📞 Đang lấy JobId tiếp theo từ API (Thread: " .. CONFIG.THREAD_ID .. ")...")
-    local response = brainRequest("/next/" .. CONFIG.THREAD_ID, "GET")
+    
+    -- Debug: Check if brainRequest is available
+    if not brainRequest then
+        warn("❌ brainRequest function not available!")
+        return nil
+    end
+    
+    local success, response = pcall(function()
+        return brainRequest("/next/" .. CONFIG.THREAD_ID, "GET")
+    end)
+    
+    if not success then
+        warn("❌ Error making request: " .. tostring(response))
+        return nil
+    end
+    
     if response and response.Body and response.Body ~= "NONE" then
         local jobId = response.Body:gsub("%s+", "")
         print("✅ Lấy được JobId: " .. jobId:sub(1, 8) .. "...")
@@ -248,6 +284,7 @@ local function getNextJobId()
         print("❌ Không lấy được JobId từ API")
         if response then
             print("Response Body: " .. tostring(response.Body))
+            print("Response Status: " .. tostring(response.StatusCode))
         else
             print("No response from API")
         end
@@ -257,10 +294,13 @@ end
 
 -- Join server bằng JobId
 local function joinServer(jobId)
+    print("🚀 DEBUG - joinServer() called with JobId: " .. tostring(jobId))
+    
     if not jobId or jobId == "" then 
         warn("⚠️ JobId trống, không thể join!")
         return 
     end
+    
     print("🌍 Đang join server: " .. jobId)
     
     -- Add safety check for teleport
@@ -271,10 +311,22 @@ local function joinServer(jobId)
     if not success then
         warn("⚠️ Lỗi teleport: " .. tostring(err))
         -- Báo server lỗi và thử lấy server khác
-        brainRequest("/report-full", "POST", { jobId = jobId })
+        local reportSuccess, reportErr = pcall(function()
+            brainRequest("/report-full", "POST", { jobId = jobId })
+        end)
+        
+        if not reportSuccess then
+            warn("❌ Error reporting server full: " .. tostring(reportErr))
+        end
+        
         task.wait(2)
         if hopToNext then -- Check if function exists
-            hopToNext() -- Retry với server khác
+            local hopSuccess, hopErr = pcall(hopToNext)
+            if not hopSuccess then
+                warn("❌ Error calling hopToNext: " .. tostring(hopErr))
+            end
+        else
+            warn("❌ hopToNext function not available!")
         end
     end
 end
@@ -315,31 +367,57 @@ end
 local function checkBoss()
     local secs, timeStr = getServerAge()
     local minutes = math.floor(secs / 60)
-    local h = math.floor(minutes / 60)
-    local m = minutes % 60
     
-    -- Boss spawn mỗi 2 giờ tại phút 55
-    if (h % 2 ~= 0 and m >= 55) then
-        print("🔥 BOSS DETECTED: Server age " .. timeStr .. " - Boss sắp spawn!")
-        return true
+    -- Boss spawn mỗi 1 giờ (60 phút) tại phút 00
+    local cycle = math.floor(minutes / 60)
+    local minuteInCycle = minutes % 60
+    
+    -- Trong vòng 5 phút trước/sau spawn (55-05 phút)
+    if minuteInCycle >= 55 or minuteInCycle <= 5 then
+        local nextSpawnMinute = (cycle + 1) * 60
+        local timeToBoss = nextSpawnMinute - minutes
+        
+        if timeToBoss <= 0 then
+            -- Boss đã spawn
+            local timeSinceBoss = -timeToBoss
+            print("🔥 BOSS DETECTED: Đã spawn " .. timeSinceBoss .. " phút trước (Server age: " .. timeStr .. ")")
+            return true, "spawn_" .. timeSinceBoss .. "m_ago"
+        else
+            -- Boss sắp spawn
+            print("🔥 BOSS DETECTED: Sẽ spawn sau " .. timeToBoss .. " phút (Server age: " .. timeStr .. ")")
+            return true, "spawn_in_" .. timeToBoss .. "m"
+        end
     end
-    return false
+    
+    return false, nil
 end
 
 local function checkRift()
     local secs, timeStr = getServerAge()
     local minutes = math.floor(secs / 60)
     
-    -- Rift spawn mỗi 90 phút
-    local cycle = math.floor((minutes + 10) / 90)
-    if cycle > 0 then
-        local spawnTime = cycle * 90
-        if minutes >= spawnTime - 10 and minutes <= spawnTime + 10 then
-            print("🌀 RIFT DETECTED: Server age " .. timeStr .. " - Rift active!")
-            return true
+    -- Rift spawn mỗi 90 phút tại phút 00 của cycle
+    local cycle = math.floor(minutes / 90)
+    local minuteInCycle = minutes % 90
+    
+    -- Trong vòng 10 phút trước/sau spawn (80-10 phút)
+    if minuteInCycle >= 80 or minuteInCycle <= 10 then
+        local nextSpawnMinute = (cycle + 1) * 90
+        local timeToRift = nextSpawnMinute - minutes
+        
+        if timeToRift <= 0 then
+            -- Rift đã spawn
+            local timeSinceRift = -timeToRift
+            print("🌀 RIFT DETECTED: Đã spawn " .. timeSinceRift .. " phút trước (Server age: " .. timeStr .. ")")
+            return true, "spawn_" .. timeSinceRift .. "m_ago"
+        else
+            -- Rift sắp spawn
+            print("🌀 RIFT DETECTED: Sẽ spawn sau " .. timeToRift .. " phút (Server age: " .. timeStr .. ")")
+            return true, "spawn_in_" .. timeToRift .. "m"
         end
     end
-    return false
+    
+    return false, nil
 end
 
 -- ==========================================
@@ -387,19 +465,47 @@ end
 
 -- Hop đến server tiếp theo
 function hopToNext() -- Make it global function
+    print("\n" .. string.rep("=", 50))
+    print("🚀 DEBUG - hopToNext() CALLED")
+    print(string.rep("=", 50))
+    
     if stopHop then
         print("⏸ Server hopping đã bị dừng")
         return
     end
     
+    print("✅ stopHop is false, continuing with hop logic...")
+    
     local retryCount = 0
     local maxRetries = 5
     
     while retryCount < maxRetries do
-        local nextJobId = getNextJobId()
+        print("\n🔍 DEBUG - Attempt " .. (retryCount + 1) .. "/" .. maxRetries)
+        print("🔍 DEBUG - Calling getNextJobId()...")
+        
+        local success, nextJobId = pcall(getNextJobId)
+        if not success then
+            warn("❌ Error calling getNextJobId: " .. tostring(nextJobId))
+            nextJobId = nil
+        else
+            print("✅ getNextJobId() returned: " .. tostring(nextJobId))
+        end
+        
         if nextJobId then
-            print("📞 Lấy được JobId mới: " .. nextJobId:sub(1, 8) .. "...")
-            joinServer(nextJobId)
+            print("✅ Got JobId: " .. nextJobId:sub(1, 8) .. "...")
+            print("🔍 DEBUG - Calling joinServer()...")
+            
+            local joinSuccess, joinErr = pcall(function()
+                joinServer(nextJobId)
+            end)
+            
+            if not joinSuccess then
+                warn("❌ Error calling joinServer: " .. tostring(joinErr))
+            else
+                print("✅ joinServer() called successfully")
+            end
+            
+            print("🚀 Hop process completed, exiting hopToNext()")
             return -- Thoát vì đã tìm được server
         else
             retryCount = retryCount + 1
@@ -411,10 +517,13 @@ function hopToNext() -- Make it global function
                 task.wait(30)
                 retryCount = 0 -- Reset để thử lại
             else
+                print("⏳ Waiting 5 seconds before retry...")
                 task.wait(5) -- Đợi 5 giây trước khi retry
             end
         end
     end
+    
+    print("⚠️ hopToNext() finished without successful hop")
 end
 
 -- ==========================================
@@ -425,18 +534,50 @@ end
 TeleportService.TeleportInitFailed:Connect(function(player, result, errorMessage)
     warn("⚠️ Teleport thất bại: " .. tostring(errorMessage))
     
-    -- Báo server full
-    brainRequest("/report-full", "POST", { jobId = currentJobId })
+    -- Debug: Check function availability
+    print("🔍 DEBUG - brainRequest available: " .. tostring(brainRequest ~= nil))
+    print("🔍 DEBUG - hopToNext available: " .. tostring(hopToNext ~= nil))
+    print("🔍 DEBUG - currentJobId: " .. tostring(currentJobId))
+    
+    -- Báo server full (with safety check)
+    if brainRequest then
+        local success, err = pcall(function()
+            brainRequest("/report-full", "POST", { jobId = currentJobId })
+        end)
+        if not success then
+            warn("❌ Error reporting server full: " .. tostring(err))
+        end
+    else
+        warn("❌ brainRequest function not available")
+    end
     
     if not stopHop then
         task.wait(2)
-        hopToNext()
+        if hopToNext and type(hopToNext) == "function" then
+            local success, err = pcall(hopToNext)
+            if not success then
+                warn("❌ Error calling hopToNext: " .. tostring(err))
+            end
+        else
+            warn("❌ hopToNext function not available or not a function")
+        end
     end
 end)
 
 -- ==========================================
 -- MAIN EXECUTION
 -- ==========================================
+
+-- Test HTTP connection first
+print("🔍 Testing HTTP connection...")
+local testResponse = brainRequest("/status", "GET")
+if testResponse then
+    print("✅ HTTP connection successful!")
+    print("📡 Server response: " .. (testResponse.StatusCode or "Unknown"))
+else
+    warn("⚠️ HTTP connection failed - continuing anyway...")
+end
+
 task.spawn(function()
     print("🕒 Đang chờ game load hoàn tất...")
     if not game:IsLoaded() then game.Loaded:Wait() end
@@ -479,36 +620,45 @@ task.spawn(function()
     printCollectedData()
     
     -- Check Boss/Rift
-    local hasBoss = checkBoss()
-    local hasRift = checkRift()
+    local hasBoss, bossInfo = checkBoss()
+    local hasRift, riftInfo = checkRift()
     
-    -- Quyết định có dừng lại không
-    local shouldStop = hasBoss or hasRift or #allPlayers >= 15 or #allGangs >= 3
-    
-    if shouldStop then
-        stopHop = true
-        local reason = ""
-        if hasBoss then reason = reason .. "Boss " end
-        if hasRift then reason = reason .. "Rift " end
-        if #allPlayers >= 15 then reason = reason .. "ManyPlayers(" .. #allPlayers .. ") " end
-        if #allGangs >= 3 then reason = reason .. "ManyGangs(" .. #allGangs .. ") " end
-        
-        print("🛑 DỪNG HOP - Lý do: " .. reason)
-        markJobCompleted("interesting_server")
-        showNextButton()
-        return
+    -- Báo cáo Boss/Rift về API nếu phát hiện
+    if hasBoss then
+        brainRequest("/report-boss", "POST", {
+            jobId = currentJobId,
+            info = bossInfo,
+            ageMinutes = math.floor(getServerAge() / 60)
+        })
+        print("📡 Đã báo cáo Boss server về API")
     end
     
-    -- Tiếp tục hop nếu auto hop enabled
-    if CONFIG.AUTO_HOP and not stopHop then
-        print("📝 Server bình thường, tiếp tục hop...")
-        markJobCompleted("normal_server") 
-        task.wait(2) -- Tăng thời gian chờ
-        hopToNext()
-    else
-        print("🛑 Auto hop bị tắt hoặc đã dừng")
-        showNextButton()
+    if hasRift then
+        brainRequest("/report-rift", "POST", {
+            jobId = currentJobId,
+            info = riftInfo,
+            ageMinutes = math.floor(getServerAge() / 60)
+        })
+        print("📡 Đã báo cáo Rift server về API")
     end
+    
+    -- Debug decision making
+    print("\n🔍 DEBUG - Decision Making:")
+    print("  - hasBoss: " .. tostring(hasBoss) .. (bossInfo and (" (" .. bossInfo .. ")") or ""))
+    print("  - hasRift: " .. tostring(hasRift) .. (riftInfo and (" (" .. riftInfo .. ")") or ""))
+    print("  - Players count: " .. #allPlayers)
+    print("  - Gangs count: " .. #allGangs)
+    print("  - AUTO_HOP: " .. tostring(CONFIG.AUTO_HOP))
+    print("  - stopHop: " .. tostring(stopHop))
+    
+    -- LUÔN AUTO-HOP - Không bao giờ dừng
+    print("📝 Server đã quét xong, tiếp tục hop...")
+    print("📝 Calling markJobCompleted('completed')...")
+    markJobCompleted("completed") 
+    print("📝 Waiting 2 seconds before hop...")
+    task.wait(2)
+    print("📝 Calling hopToNext()...")
+    hopToNext()
 end)
 
 -- ==========================================

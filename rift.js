@@ -260,19 +260,19 @@ const server = http.createServer((req, res) => {
                     const timestamp = Math.floor(Date.now() / 1000);
                     
                     if (type === 'player') {
-                        // Store multiple servers for each player
-                        if (!db.players[name]) {
-                            db.players[name] = {};
-                        }
-                        db.players[name][jobId] = timestamp;
-                        console.log(`\n[PLAYER FOUND] ${name} | ${jobId.substring(0, 8)}...`);
+                        // PLAYER: Chỉ lưu JobId mới nhất (xóa JobId cũ)
+                        db.players[name] = {
+                            jobId: jobId,
+                            timestamp: timestamp
+                        };
+                        console.log(`\n[PLAYER FOUND] ${name} | ${jobId.substring(0, 8)}... (updated to latest)`);
                     } else if (type === 'gang') {
-                        // Store multiple servers for each gang
+                        // GANG: Lưu tất cả JobIds (multiple servers)
                         if (!db.gangs[name]) {
                             db.gangs[name] = {};
                         }
                         db.gangs[name][jobId] = timestamp;
-                        console.log(`\n[GANG FOUND] ${name} | ${jobId.substring(0, 8)}...`);
+                        console.log(`\n[GANG FOUND] ${name} | ${jobId.substring(0, 8)}... (total servers: ${Object.keys(db.gangs[name]).length})`);
                     }
                     saveDb();
                 }
@@ -479,16 +479,14 @@ const server = http.createServer((req, res) => {
         }
 
         const results = [];
-        for (const [name, servers] of Object.entries(db.players)) {
+        for (const [name, data] of Object.entries(db.players)) {
             if (name.toLowerCase().includes(playerName.toLowerCase())) {
-                // Convert all servers for this player
-                for (const [jobId, timestamp] of Object.entries(servers)) {
-                    results.push({
-                        displayName: name,
-                        jobId: jobId,
-                        timestamp: timestamp
-                    });
-                }
+                // PLAYER: Chỉ có 1 JobId (mới nhất)
+                results.push({
+                    displayName: name,
+                    jobId: data.jobId,
+                    timestamp: data.timestamp
+                });
             }
         }
 
