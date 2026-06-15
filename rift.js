@@ -215,12 +215,21 @@ const server = http.createServer((req, res) => {
                 const data = JSON.parse(body);
                 const { type, name, jobId } = data;
                 if (type && name && jobId) {
-                    const entry = { jobId, timestamp: Math.floor(Date.now() / 1000) };
+                    const timestamp = Math.floor(Date.now() / 1000);
+                    
                     if (type === 'player') {
-                        db.players[name] = entry;
+                        // Store multiple servers for each player
+                        if (!db.players[name]) {
+                            db.players[name] = {};
+                        }
+                        db.players[name][jobId] = timestamp;
                         console.log(`\n[PLAYER FOUND] ${name} | ${jobId.substring(0, 8)}...`);
                     } else if (type === 'gang') {
-                        db.gangs[name] = entry;
+                        // Store multiple servers for each gang
+                        if (!db.gangs[name]) {
+                            db.gangs[name] = {};
+                        }
+                        db.gangs[name][jobId] = timestamp;
                         console.log(`\n[GANG FOUND] ${name} | ${jobId.substring(0, 8)}...`);
                     }
                     saveDb();
@@ -231,11 +240,19 @@ const server = http.createServer((req, res) => {
     } else if (req.url === '/scan-jobids' && req.method === 'POST') {
         // API to scan new JobIds
         console.log('\n[API] Bắt đầu quét JobId mới...');
+        
         jobIdScanner.scanNewJobIds().then(result => {
             console.log(`[API] Quét hoàn thành: ${JSON.stringify(result)}`);
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(result));
+        }).catch(err => {
+            console.error(`[API] Lỗi quét JobId: ${err.message}`);
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ 
+                success: false, 
+                error: err.message 
+            }));
         });
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ message: 'JobId scanning started' }));
     } else if (req.url === '/status' && req.method === 'GET') {
         // API to get system status
         const scannerStatus = jobIdScanner.getStatus();
@@ -420,16 +437,21 @@ const server = http.createServer((req, res) => {
         }
 
         const results = [];
-        for (const [name, data] of Object.entries(db.players)) {
+        for (const [name, servers] of Object.entries(db.players)) {
             if (name.toLowerCase().includes(playerName.toLowerCase())) {
-                results.push({
-                    displayName: name,
-                    jobId: data.jobId,
-                    leaderstats: data.leaderstats || {},
-                    timestamp: data.timestamp
-                });
+                // Convert all servers for this player
+                for (const [jobId, timestamp] of Object.entries(servers)) {
+                    results.push({
+                        displayName: name,
+                        jobId: jobId,
+                        timestamp: timestamp
+                    });
+                }
             }
         }
+
+        // Sort by most recent first
+        results.sort((a, b) => b.timestamp - a.timestamp);
 
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ success: true, data: results }));
@@ -446,17 +468,21 @@ const server = http.createServer((req, res) => {
         }
 
         const results = [];
-        for (const [name, data] of Object.entries(db.gangs)) {
+        for (const [name, servers] of Object.entries(db.gangs)) {
             if (name.toLowerCase().includes(gangName.toLowerCase())) {
-                results.push({
-                    Name: name,
-                    jobId: data.jobId,
-                    MemberCount: data.MemberCount || 'N/A',
-                    Owner: data.Owner || 'N/A',
-                    timestamp: data.timestamp
-                });
+                // Convert all servers for this gang
+                for (const [jobId, timestamp] of Object.entries(servers)) {
+                    results.push({
+                        Name: name,
+                        jobId: jobId,
+                        timestamp: timestamp
+                    });
+                }
             }
         }
+
+        // Sort by most recent first
+        results.sort((a, b) => b.timestamp - a.timestamp);
 
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ success: true, data: results }));

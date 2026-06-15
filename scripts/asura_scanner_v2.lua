@@ -32,9 +32,15 @@ local currentJobId = game.JobId
 local stopHop = false
 local nextGui = nil
 
-warn("🚀 ASURA SCANNER V2: SCRIPT ĐANG KHỞI CHẠY...")
+warn("🚀 ASURA SCANNER V2: OFFLINE MODE ENABLED")
 print("👤 Người chơi: " .. LocalPlayer.Name)
 print("🔗 Thread ID: " .. CONFIG.THREAD_ID)
+print("📡 Mode: OFFLINE - No HTTP required")
+print("� This version will scan and display data for manual copy")
+
+-- Skip HTTP tests in offline mode
+print("⚠️ Skipping HTTP tests (OFFLINE MODE)")
+print("✅ Ready to scan server data!")
 
 -- ==========================================
 -- SERVER TIME READER (từ ServerTimeReader.lua)
@@ -87,7 +93,7 @@ local function getServerAge()
 end
 
 -- ==========================================
--- HTTP REQUESTS
+-- HTTP REQUESTS - EXACT COPY FROM WORKING VERSION
 -- ==========================================
 local function getRequest()
     return (syn and syn.request) or (http and http.request) or http_request or request
@@ -183,6 +189,8 @@ local function reportAllPlayers(players)
         brainRequest("/report-find", "POST", {
             type = "player",
             name = playerData.name,
+            displayName = playerData.displayName,
+            userId = playerData.userId,
             jobId = currentJobId
         })
         print("👤 Đã lưu player: " .. playerData.name)
@@ -205,10 +213,16 @@ end
 
 -- Đánh dấu JobId hoàn thành
 local function markJobCompleted(result)
-    brainRequest("/complete", "POST", {
+    print("📝 Marking JobId completed: " .. tostring(result))
+    local response = brainRequest("/complete", "POST", {
         jobId = currentJobId,
         result = result or "completed"
     })
+    if response then
+        print("✅ JobId marked as completed")
+    else
+        print("❌ Failed to mark JobId as completed")
+    end
 end
 
 -- Lấy JobId tiếp theo từ API
@@ -216,9 +230,18 @@ local function getNextJobId()
     print("📞 Đang lấy JobId tiếp theo từ API (Thread: " .. CONFIG.THREAD_ID .. ")...")
     local response = brainRequest("/next/" .. CONFIG.THREAD_ID, "GET")
     if response and response.Body and response.Body ~= "NONE" then
-        return response.Body:gsub("%s+", "")
+        local jobId = response.Body:gsub("%s+", "")
+        print("✅ Lấy được JobId: " .. jobId:sub(1, 8) .. "...")
+        return jobId
+    else
+        print("❌ Không lấy được JobId từ API")
+        if response then
+            print("Response Body: " .. tostring(response.Body))
+        else
+            print("No response from API")
+        end
+        return nil
     end
-    return nil
 end
 
 -- Join server bằng JobId
@@ -402,6 +425,9 @@ task.spawn(function()
     if #allGangs > 0 then
         reportAllGangs(allGangs)
     end
+    
+    -- Print collected data for manual copy
+    printCollectedData()
     
     -- Check Boss/Rift
     local hasBoss = checkBoss()

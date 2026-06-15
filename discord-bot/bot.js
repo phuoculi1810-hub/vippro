@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -435,7 +435,7 @@ client.on('interactionCreate', async (interaction) => {
 
     try {
         // Defer reply to prevent timeout
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         if (commandName === 'test') {
             const embed = new EmbedBuilder()
@@ -480,16 +480,35 @@ client.on('interactionCreate', async (interaction) => {
                     if (result.success && result.data.length > 0) {
                         embed = new EmbedBuilder()
                             .setTitle(`🎮 Tìm thấy player: ${playerName}`)
-                            .setColor(0x00ff00);
+                            .setColor(0x00ff00)
+                            .setDescription(`Tìm thấy **${result.data.length}** server(s)`);
                         
-                        result.data.slice(0, 10).forEach((player, index) => {
+                        result.data.slice(0, 15).forEach((player, index) => {
                             const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${player.jobId}`;
+                            
+                            // Calculate time ago
+                            const now = Math.floor(Date.now() / 1000);
+                            const timeDiff = now - player.timestamp;
+                            const minutesAgo = Math.floor(timeDiff / 60);
+                            const hoursAgo = Math.floor(minutesAgo / 60);
+                            
+                            let timeText = '';
+                            if (hoursAgo > 0) {
+                                timeText = `${hoursAgo}h ${minutesAgo % 60}m trước`;
+                            } else {
+                                timeText = `${minutesAgo}m trước`;
+                            }
+                            
                             embed.addFields({
-                                name: `#${index + 1} - Server ${player.jobId}`,
-                                value: `👤 **${player.displayName}**\n💰 Cash: $${player.leaderstats?.Cash?.toLocaleString() || 'N/A'}\n⭐ Level: ${player.leaderstats?.Level || 'N/A'}\n🔗 [Join Server](${fishstrapLink})`,
+                                name: `Server ${index + 1}`,
+                                value: `👤 **${player.displayName}**\n🆔 ${player.jobId.substring(0, 8)}...\n🕒 ${timeText}\n🔗 [Join](${fishstrapLink})`,
                                 inline: true
                             });
                         });
+                        
+                        if (result.data.length > 15) {
+                            embed.setFooter({ text: `Hiển thị 15/${result.data.length} servers` });
+                        }
                         
                         usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} results`);
                     } else {
@@ -509,16 +528,35 @@ client.on('interactionCreate', async (interaction) => {
                     if (result.success && result.data.length > 0) {
                         embed = new EmbedBuilder()
                             .setTitle(`⚔️ Tìm thấy gang: ${gangName}`)
-                            .setColor(0x00ff00);
+                            .setColor(0x00ff00)
+                            .setDescription(`Tìm thấy **${result.data.length}** server(s)`);
                         
-                        result.data.slice(0, 10).forEach((gang, index) => {
+                        result.data.slice(0, 15).forEach((gang, index) => {
                             const fishstrapLink = `${CONFIG.FISHSTRAP_BASE}${gang.jobId}`;
+                            
+                            // Calculate time ago
+                            const now = Math.floor(Date.now() / 1000);
+                            const timeDiff = now - gang.timestamp;
+                            const minutesAgo = Math.floor(timeDiff / 60);
+                            const hoursAgo = Math.floor(minutesAgo / 60);
+                            
+                            let timeText = '';
+                            if (hoursAgo > 0) {
+                                timeText = `${hoursAgo}h ${minutesAgo % 60}m trước`;
+                            } else {
+                                timeText = `${minutesAgo}m trước`;
+                            }
+                            
                             embed.addFields({
-                                name: `#${index + 1} - Server ${gang.jobId}`,
-                                value: `⚔️ **${gang.Name}**\n👥 Members: ${gang.MemberCount || 'N/A'}\n👑 Owner: ${gang.Owner || 'N/A'}\n🔗 [Join Server](${fishstrapLink})`,
+                                name: `Server ${index + 1}`,
+                                value: `⚔️ **${gang.Name}**\n🆔 ${gang.jobId.substring(0, 8)}...\n🕒 ${timeText}\n🔗 [Join](${fishstrapLink})`,
                                 inline: true
                             });
                         });
+                        
+                        if (result.data.length > 15) {
+                            embed.setFooter({ text: `Hiển thị 15/${result.data.length} servers` });
+                        }
                         
                         usageLogger.logUsage(userId, username, key, commandName, `Found ${result.data.length} results`);
                     } else {
