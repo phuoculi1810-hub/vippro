@@ -207,6 +207,48 @@ const server = http.createServer((req, res) => {
             } catch (e) {}
             res.end('OK');
         });
+    } else if (req.url === '/report-boss' && req.method === 'POST') {
+        // Report Boss server
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const { jobId, info, ageMinutes } = JSON.parse(body);
+                if (jobId) {
+                    // Mark as boss server in database
+                    if (!db.servers[jobId]) {
+                        db.servers[jobId] = {};
+                    }
+                    db.servers[jobId].boss = info;
+                    db.servers[jobId].ageAtScan = ageMinutes;
+                    db.servers[jobId].timestamp = Math.floor(Date.now() / 1000);
+                    saveDb();
+                    console.log(`\n[BOSS] Server: ${jobId.substring(0, 8)}... | ${info} | Age: ${ageMinutes}m`);
+                }
+            } catch (e) {}
+            res.end('OK');
+        });
+    } else if (req.url === '/report-rift' && req.method === 'POST') {
+        // Report Rift server
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const { jobId, info, ageMinutes } = JSON.parse(body);
+                if (jobId) {
+                    // Mark as rift server in database
+                    if (!db.servers[jobId]) {
+                        db.servers[jobId] = {};
+                    }
+                    db.servers[jobId].rift = info;
+                    db.servers[jobId].ageAtScan = ageMinutes;
+                    db.servers[jobId].timestamp = Math.floor(Date.now() / 1000);
+                    saveDb();
+                    console.log(`\n[RIFT] Server: ${jobId.substring(0, 8)}... | ${info} | Age: ${ageMinutes}m`);
+                }
+            } catch (e) {}
+            res.end('OK');
+        });
     } else if (req.url === '/report-find' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
@@ -493,37 +535,36 @@ const server = http.createServer((req, res) => {
         const now = Math.floor(Date.now() / 1000);
         
         for (const [jobId, data] of Object.entries(db.servers)) {
+            // Skip if this server doesn't have boss info
+            if (!data.boss) continue;
+            
             const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
             const hours = Math.floor(currentAge / 60);
             const minutes = currentAge % 60;
             
-            // Boss spawn logic: odd hours at minute 55
-            let timeToBoss = 0;
-            if (hours % 2 === 0) {
-                // Even hour -> boss at next odd hour minute 55
-                timeToBoss = (60 - minutes) + 55;
-            } else {
-                // Odd hour -> boss at minute 55
-                timeToBoss = 55 - minutes;
-                if (timeToBoss < 0) timeToBoss += 120; // Next cycle
+            // Parse boss info from Lua script (e.g., "spawn_in_5m" or "spawn_2m_ago")
+            let displayText = '';
+            if (data.boss.includes('spawn_in_')) {
+                const mins = data.boss.match(/\d+/)[0];
+                displayText = `Spawn sau ${mins} phút`;
+            } else if (data.boss.includes('spawn_') && data.boss.includes('_ago')) {
+                const mins = data.boss.match(/\d+/)[0];
+                displayText = `Đã spawn ${mins} phút trước`;
             }
             
-            // Only include servers within ±10 minutes of boss spawn
-            if (Math.abs(timeToBoss) <= 10 || (timeToBoss >= 110 && timeToBoss <= 130)) {
-                results.push({
-                    jobId: jobId,
-                    serverTime: `${hours}h ${minutes}m`,
-                    bossTimeLeft: `${timeToBoss > 0 ? '+' : ''}${timeToBoss}m`,
-                    status: timeToBoss <= 0 ? 'spawned' : 'coming'
-                });
-            }
+            results.push({
+                jobId: jobId,
+                serverTime: `${hours}h ${minutes}m`,
+                bossTimeLeft: displayText,
+                status: data.boss.includes('_ago') ? 'spawned' : 'coming'
+            });
         }
         
-        // Sort by closest to boss time
+        // Sort: spawned first, then by closest to spawn
         results.sort((a, b) => {
-            const aTime = parseInt(a.bossTimeLeft.replace(/[^\-\d]/g, ''));
-            const bTime = parseInt(b.bossTimeLeft.replace(/[^\-\d]/g, ''));
-            return Math.abs(aTime) - Math.abs(bTime);
+            if (a.status === 'spawned' && b.status !== 'spawned') return -1;
+            if (a.status !== 'spawned' && b.status === 'spawned') return 1;
+            return 0;
         });
 
         res.setHeader('Content-Type', 'application/json');
@@ -535,34 +576,36 @@ const server = http.createServer((req, res) => {
         const now = Math.floor(Date.now() / 1000);
         
         for (const [jobId, data] of Object.entries(db.servers)) {
-            const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+            // Skip if this server doesn't have rift info
+            if (!data.rift) continue;
             
-            // Rift spawn logic: every 90 minutes after 10 minutes
-            const cycle = Math.floor((currentAge + 10) / 90);
-            if (cycle > 0) {
-                const spawnTime = cycle * 90;
-                const timeToRift = spawnTime - currentAge;
-                
-                // Only include servers within ±10 minutes of rift spawn
-                if (Math.abs(timeToRift) <= 10) {
-                    const hours = Math.floor(currentAge / 60);
-                    const minutes = currentAge % 60;
-                    
-                    results.push({
-                        jobId: jobId,
-                        serverTime: `${hours}h ${minutes}m`,
-                        riftTimeLeft: `${timeToRift > 0 ? '+' : ''}${timeToRift}m`,
-                        status: timeToRift <= 0 ? 'spawned' : 'coming'
-                    });
-                }
+            const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+            const hours = Math.floor(currentAge / 60);
+            const minutes = currentAge % 60;
+            
+            // Parse rift info from Lua script (e.g., "spawn_in_5m" or "spawn_2m_ago")
+            let displayText = '';
+            if (data.rift.includes('spawn_in_')) {
+                const mins = data.rift.match(/\d+/)[0];
+                displayText = `Spawn sau ${mins} phút`;
+            } else if (data.rift.includes('spawn_') && data.rift.includes('_ago')) {
+                const mins = data.rift.match(/\d+/)[0];
+                displayText = `Đã spawn ${mins} phút trước`;
             }
+            
+            results.push({
+                jobId: jobId,
+                serverTime: `${hours}h ${minutes}m`,
+                riftTimeLeft: displayText,
+                status: data.rift.includes('_ago') ? 'spawned' : 'coming'
+            });
         }
         
-        // Sort by closest to rift time
+        // Sort: spawned first, then by closest to spawn
         results.sort((a, b) => {
-            const aTime = parseInt(a.riftTimeLeft.replace(/[^\-\d]/g, ''));
-            const bTime = parseInt(b.riftTimeLeft.replace(/[^\-\d]/g, ''));
-            return Math.abs(aTime) - Math.abs(bTime);
+            if (a.status === 'spawned' && b.status !== 'spawned') return -1;
+            if (a.status !== 'spawned' && b.status === 'spawned') return 1;
+            return 0;
         });
 
         res.setHeader('Content-Type', 'application/json');
