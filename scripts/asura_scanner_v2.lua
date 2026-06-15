@@ -11,7 +11,7 @@
 -- ==========================================
 local CONFIG = {
     THREAD_ID = "thread_" .. math.random(1000, 9999), -- Unique thread ID
-    BRAIN_URL = "http://localhost:3000",
+    BRAIN_URL = "https://asura-scanner-system-v2-production.up.railway.app",
     AUTO_HOP = true,
     WAIT_TIME_PER_SERVER = 8, -- Tăng thời gian để quét kỹ hơn
     FISHSTRAP_URL = "https://www.fishstrap.app/v1/joingame?placeId=13358463560&gameInstanceId=",
@@ -223,9 +223,24 @@ end
 
 -- Join server bằng JobId
 local function joinServer(jobId)
-    if not jobId or jobId == "" then return end
+    if not jobId or jobId == "" then 
+        warn("⚠️ JobId trống, không thể join!")
+        return 
+    end
     print("🌍 Đang join server: " .. jobId)
-    TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+    
+    -- Add safety check for teleport
+    local success, err = pcall(function()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+    end)
+    
+    if not success then
+        warn("⚠️ Lỗi teleport: " .. tostring(err))
+        -- Báo server lỗi và thử lấy server khác
+        brainRequest("/report-full", "POST", { jobId = jobId })
+        task.wait(2)
+        hopToNext() -- Retry với server khác
+    end
 end
 
 -- ==========================================
@@ -302,13 +317,33 @@ end
 
 -- Hop đến server tiếp theo
 function hopToNext()
-    local nextJobId = getNextJobId()
-    if nextJobId then
-        joinServer(nextJobId)
-    else
-        warn("⚠️ Không lấy được JobId mới từ API!")
-        task.wait(5)
-        hopToNext() -- Retry
+    if stopHop then
+        print("⏸ Server hopping đã bị dừng")
+        return
+    end
+    
+    local retryCount = 0
+    local maxRetries = 5
+    
+    while retryCount < maxRetries do
+        local nextJobId = getNextJobId()
+        if nextJobId then
+            print("📞 Lấy được JobId mới: " .. nextJobId:sub(1, 8) .. "...")
+            joinServer(nextJobId)
+            return -- Thoát vì đã tìm được server
+        else
+            retryCount = retryCount + 1
+            warn("⚠️ Không lấy được JobId mới từ API! Retry " .. retryCount .. "/" .. maxRetries)
+            
+            if retryCount >= maxRetries then
+                warn("❌ Đã thử " .. maxRetries .. " lần nhưng không lấy được JobId!")
+                print("🔄 Sẽ thử lại sau 30 giây...")
+                task.wait(30)
+                retryCount = 0 -- Reset để thử lại
+            else
+                task.wait(5) -- Đợi 5 giây trước khi retry
+            end
+        end
     end
 end
 
@@ -390,11 +425,14 @@ task.spawn(function()
     end
     
     -- Tiếp tục hop nếu auto hop enabled
-    if CONFIG.AUTO_HOP then
+    if CONFIG.AUTO_HOP and not stopHop then
         print("📝 Server bình thường, tiếp tục hop...")
         markJobCompleted("normal_server") 
-        task.wait(1)
+        task.wait(2) -- Tăng thời gian chờ
         hopToNext()
+    else
+        print("🛑 Auto hop bị tắt hoặc đã dừng")
+        showNextButton()
     end
 end)
 

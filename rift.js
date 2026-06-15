@@ -33,6 +33,74 @@ setInterval(() => {
     jobIdScanner.cleanupStuckScanning();
 }, 5 * 60 * 1000);
 
+// Auto cleanup old data every 6 hours (để kịp thời clear server 38h)
+setInterval(() => {
+    cleanupOldData();
+}, 6 * 60 * 60 * 1000);
+
+// Cleanup old data function - Dựa trên server age 38 tiếng
+function cleanupOldData() {
+    let cleanedCount = { servers: 0, players: 0, gangs: 0 };
+    const maxServerAge = 38 * 60; // 38 tiếng = 2280 phút
+    const now = Math.floor(Date.now() / 1000);
+
+    // Clean servers based on calculated age (38 hours = 2280 minutes)
+    const serversToDelete = [];
+    for (const [jobId, data] of Object.entries(db.servers)) {
+        const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+        
+        if (currentAge >= maxServerAge) {
+            serversToDelete.push(jobId);
+            cleanedCount.servers++;
+        }
+    }
+
+    // Delete old servers
+    serversToDelete.forEach(jobId => {
+        delete db.servers[jobId];
+    });
+
+    // Clean players from old servers
+    const playersToDelete = [];
+    for (const [name, data] of Object.entries(db.players)) {
+        if (serversToDelete.includes(data.jobId)) {
+            playersToDelete.push(name);
+            cleanedCount.players++;
+        }
+    }
+
+    // Delete players from old servers
+    playersToDelete.forEach(name => {
+        delete db.players[name];
+    });
+
+    // Clean gangs from old servers
+    const gangsToDelete = [];
+    for (const [name, data] of Object.entries(db.gangs)) {
+        if (serversToDelete.includes(data.jobId)) {
+            gangsToDelete.push(name);
+            cleanedCount.gangs++;
+        }
+    }
+
+    // Delete gangs from old servers
+    gangsToDelete.forEach(name => {
+        delete db.gangs[name];
+    });
+
+    if (cleanedCount.servers > 0 || cleanedCount.players > 0 || cleanedCount.gangs > 0) {
+        saveDb();
+        console.log(`\n🧹 [AUTO-CLEANUP] Cleaned data from servers ≥38h old:`);
+        console.log(`   Servers: ${cleanedCount.servers}`);
+        console.log(`   Players: ${cleanedCount.players}`);
+        console.log(`   Gangs: ${cleanedCount.gangs}`);
+        
+        if (serversToDelete.length > 0) {
+            console.log(`   Example old servers: ${serversToDelete.slice(0, 3).map(id => id.substring(0, 8) + '...').join(', ')}`);
+        }
+    }
+}
+
 function saveDb() {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
@@ -240,6 +308,97 @@ const server = http.createServer((req, res) => {
         } else {
             res.end('NONE');
         }
+    } else if (req.url === '/clear-data' && req.method === 'POST') {
+        // Clear data API endpoint
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const { type, confirm } = JSON.parse(body);
+                
+                if (!confirm) {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Confirmation required' }));
+                    return;
+                }
+
+                const beforeCount = {
+                    servers: Object.keys(db.servers).length,
+                    players: Object.keys(db.players).length,
+                    gangs: Object.keys(db.gangs).length
+                };
+
+                if (type === 'all') {
+                    db = { servers: {}, players: {}, gangs: {} };
+                } else if (type === 'players') {
+                    db.players = {};
+                } else if (type === 'gangs') {
+                    db.gangs = {};
+                } else if (type === 'servers') {
+                    db.servers = {};
+                } else if (type === 'old') {
+                    const maxServerAge = 38 * 60; // 38 tiếng = 2280 phút
+                    const now = Math.floor(Date.now() / 1000);
+                    
+                    // Find servers ≥38h old based on server age
+                    const serversToDelete = [];
+                    for (const [jobId, data] of Object.entries(db.servers)) {
+                        const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+                        
+                        if (currentAge >= maxServerAge) {
+                            serversToDelete.push(jobId);
+                        }
+                    }
+
+                    // Delete old servers
+                    serversToDelete.forEach(jobId => {
+                        delete db.servers[jobId];
+                    });
+
+                    // Delete players from old servers
+                    for (const [name, data] of Object.entries(db.players)) {
+                        if (serversToDelete.includes(data.jobId)) {
+                            delete db.players[name];
+                        }
+                    }
+                    
+                    // Delete gangs from old servers
+                    for (const [name, data] of Object.entries(db.gangs)) {
+                        if (serversToDelete.includes(data.jobId)) {
+                            delete db.gangs[name];
+                        }
+                    }
+                }
+
+                saveDb();
+
+                const afterCount = {
+                    servers: Object.keys(db.servers).length,
+                    players: Object.keys(db.players).length,
+                    gangs: Object.keys(db.gangs).length
+                };
+
+                const result = {
+                    success: true,
+                    type: type,
+                    before: beforeCount,
+                    after: afterCount,
+                    cleared: {
+                        servers: beforeCount.servers - afterCount.servers,
+                        players: beforeCount.players - afterCount.players,
+                        gangs: beforeCount.gangs - afterCount.gangs
+                    }
+                };
+
+                console.log(`\n[API] Database cleared (${type}):`, result.cleared);
+                
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(result));
+            } catch (e) {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        });
     } else if (req.url === '/join' && req.method === 'GET') {
         if (pendingJoinJobId) {
             const jobId = pendingJoinJobId;
@@ -266,9 +425,12 @@ server.listen(PORT, () => {
     console.log(`  GET  /status - Xem trạng thái hệ thống`);
     console.log(`  GET  /next/threadId - Lấy JobId theo thread`);
     console.log(`  POST /complete - Đánh dấu hoàn thành`);
-    console.log(`Lenh: /rift, /boss, /list, /clear, /reload`);
+    console.log(`  POST /clear-data - Clear database`);
+    console.log(`Lenh: /rift, /boss, /list, /reload`);
     console.log(`      /player, /gang, /joinplayer, /joingang`);
     console.log(`      /scan - Quét JobId mới`);
+    console.log(`      /ages - Hiển thị server ages (monitor 38h limit)`);
+    console.log(`      /clear [confirm|old|players|gangs|servers] - Clear data`);
     console.log(`==================================================\n`);
 });
 
@@ -304,6 +466,128 @@ rl.on('line', (line) => {
     } else if (cmd === '/reload') {
         jobIdScanner.loadData();
         console.log(`✅ Đã reload dữ liệu JobId Scanner.`);
+    } else if (cmd.startsWith('/clear')) {
+        const parts = cmd.split(' ');
+        const type = parts[1] || 'confirm';
+        
+        if (type === 'confirm') {
+            const beforeCount = {
+                servers: Object.keys(db.servers).length,
+                players: Object.keys(db.players).length,
+                gangs: Object.keys(db.gangs).length
+            };
+            
+            db = { servers: {}, players: {}, gangs: {} };
+            saveDb();
+            
+            console.log(`🧹 Database cleared completely.`);
+            console.log(`   Servers: ${beforeCount.servers} → 0`);
+            console.log(`   Players: ${beforeCount.players} → 0`);
+            console.log(`   Gangs: ${beforeCount.gangs} → 0`);
+        } else if (type === 'old') {
+            const maxServerAge = 38 * 60; // 38 tiếng = 2280 phút
+            const now = Math.floor(Date.now() / 1000);
+            let cleanedCount = { servers: 0, players: 0, gangs: 0 };
+
+            // Find servers ≥38h old based on server age
+            const serversToDelete = [];
+            for (const [jobId, data] of Object.entries(db.servers)) {
+                const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+                
+                if (currentAge >= maxServerAge) {
+                    serversToDelete.push(jobId);
+                    cleanedCount.servers++;
+                }
+            }
+
+            // Delete old servers
+            serversToDelete.forEach(jobId => {
+                delete db.servers[jobId];
+            });
+
+            // Delete players from old servers
+            for (const [name, data] of Object.entries(db.players)) {
+                if (serversToDelete.includes(data.jobId)) {
+                    delete db.players[name];
+                    cleanedCount.players++;
+                }
+            }
+
+            // Delete gangs from old servers  
+            for (const [name, data] of Object.entries(db.gangs)) {
+                if (serversToDelete.includes(data.jobId)) {
+                    delete db.gangs[name];
+                    cleanedCount.gangs++;
+                }
+            }
+
+            saveDb();
+            console.log(`🧹 Cleared data from servers ≥38h old:`);
+            console.log(`   Servers: ${cleanedCount.servers}`);
+            console.log(`   Players: ${cleanedCount.players}`);
+            console.log(`   Gangs: ${cleanedCount.gangs}`);
+            if (serversToDelete.length > 0) {
+                console.log(`   Example: ${serversToDelete.slice(0, 3).map(id => id.substring(0, 8) + '...').join(', ')}`);
+            }
+        } else if (type === 'players') {
+            const count = Object.keys(db.players).length;
+            db.players = {};
+            saveDb();
+            console.log(`🧹 Cleared ${count} players.`);
+        } else if (type === 'gangs') {
+            const count = Object.keys(db.gangs).length;
+            db.gangs = {};
+            saveDb();
+            console.log(`🧹 Cleared ${count} gangs.`);
+        } else if (type === 'servers') {
+            const count = Object.keys(db.servers).length;
+            db.servers = {};
+            saveDb();
+            console.log(`🧹 Cleared ${count} servers.`);
+        } else {
+            console.log(`❌ Usage: /clear [confirm|old|players|gangs|servers]`);
+            console.log(`   /clear confirm - Clear all data`);
+            console.log(`   /clear old - Clear servers ≥38h old (+ their players/gangs)`);
+            console.log(`   /clear players - Clear players only`);
+            console.log(`   /clear gangs - Clear gangs only`);
+            console.log(`   /clear servers - Clear servers only`);
+        }
+    } else if (cmd === '/ages' || cmd === 'ages') {
+        console.log(`\n--- SERVER AGES ---`);
+        const now = Math.floor(Date.now() / 1000);
+        const servers = Object.entries(db.servers);
+        
+        if (servers.length === 0) {
+            console.log('❌ Chưa có server nào trong database.');
+        } else {
+            // Sort by age (oldest first)
+            servers.sort((a, b) => {
+                const ageA = a[1].ageAtScan + Math.floor((now - a[1].timestamp) / 60);
+                const ageB = b[1].ageAtScan + Math.floor((now - b[1].timestamp) / 60);
+                return ageB - ageA;
+            });
+
+            console.log(`Total servers: ${servers.length}`);
+            console.log('Oldest 10 servers:');
+            
+            servers.slice(0, 10).forEach(([jobId, data]) => {
+                const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+                const hours = Math.floor(currentAge / 60);
+                const minutes = currentAge % 60;
+                const isOld = currentAge >= 38 * 60;
+                const marker = isOld ? '🔴 OLD' : '🟢';
+                
+                console.log(`${marker} ${jobId.substring(0, 8)}... → ${hours}h${minutes}m`);
+            });
+
+            // Count old servers
+            const oldCount = servers.filter(([jobId, data]) => {
+                const age = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+                return age >= 38 * 60;
+            }).length;
+
+            console.log(`\n🔴 Servers ≥38h old: ${oldCount}/${servers.length}`);
+        }
     } else if (cmd === '/list') {
         console.log(`\n--- SERVER DATABASE (${Object.keys(db.servers).length}) ---`);
         for (const id in db.servers) console.log(`- ${id.substring(0, 8)}...: ${calculateCurrentAge(id)}m`);
@@ -311,11 +595,6 @@ rl.on('line', (line) => {
     else if (cmd === '/gang') showGangList();
     else if (cmd === '/joinplayer') showJoinList('player');
     else if (cmd === '/joingang') showJoinList('gang');
-    else if (cmd === '/clear') {
-        db = { servers: {}, players: {}, gangs: {} };
-        saveDb();
-        console.log('🧹 Database cleared.');
-    }
 });
 
 function findServers(type) {

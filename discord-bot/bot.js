@@ -4,14 +4,27 @@ const path = require('path');
 const axios = require('axios');
 
 // ==========================================
-// CONFIG
+// CONFIG - SECURE VERSION
 // ==========================================
 const CONFIG = {
-    TOKEN: process.env.DISCORD_TOKEN || 'YOUR_BOT_TOKEN_HERE',
-    BRAIN_URL: process.env.BRAIN_URL || 'http://localhost:3000',
+    TOKEN: process.env.DISCORD_TOKEN,
+    BRAIN_URL: process.env.BRAIN_URL || 'https://asura-scanner-system-v2-production.up.railway.app',
     FISHSTRAP_BASE: 'https://www.fishstrap.app/v1/joingame?placeId=13358463560&gameInstanceId=',
-    ADMIN_USER_IDS: (process.env.ADMIN_USER_IDS || '123456789012345678').split(','),
+    ADMIN_USER_IDS: (process.env.ADMIN_USER_IDS || '').split(',').filter(id => id.length > 0),
 };
+
+// Security check
+if (!CONFIG.TOKEN) {
+    console.error('❌ DISCORD_TOKEN không được thiết lập trong environment variables!');
+    console.error('💡 Thêm DISCORD_TOKEN vào Railway Variables hoặc .env file');
+    process.exit(1);
+}
+
+if (CONFIG.ADMIN_USER_IDS.length === 0) {
+    console.error('❌ ADMIN_USER_IDS không được thiết lập trong environment variables!');
+    console.error('💡 Thêm Discord User ID của bạn vào ADMIN_USER_IDS trong Railway Variables');
+    process.exit(1);
+}
 
 // ==========================================
 // USAGE LOGGING SYSTEM
@@ -552,6 +565,25 @@ const commands = [
         .addStringOption(option =>
             option.setName('key')
                 .setDescription('Key để kiểm tra usage')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('cleardata')
+        .setDescription('[ADMIN] Clear database (players/gangs/servers)')
+        .addStringOption(option =>
+            option.setName('type')
+                .setDescription('Loại data cần clear')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'All (Tất cả)', value: 'all' },
+                    { name: 'Players only', value: 'players' },
+                    { name: 'Gangs only', value: 'gangs' },
+                    { name: 'Servers only', value: 'servers' },
+                    { name: 'Old servers (≥38h old)', value: 'old' }
+                ))
+        .addBooleanOption(option =>
+            option.setName('confirm')
+                .setDescription('Xác nhận clear data (KHÔNG THỂ HOÀN TÁC)')
                 .setRequired(true))
 ];
 
@@ -565,9 +597,143 @@ client.on('interactionCreate', async (interaction) => {
     const userId = interaction.user.id;
 
     // Admin commands
-    if (['createkey', 'keyinfo', 'logs', 'stats'].includes(commandName)) {
+    if (['createkey', 'keyinfo', 'logs', 'stats', 'cleardata'].includes(commandName)) {
         if (!isAdmin(userId)) {
             return interaction.reply({ content: '❌ Chỉ admin mới có thể sử dụng lệnh này!', ephemeral: true });
+        }
+
+        if (commandName === 'cleardata') {
+            const type = interaction.options.getString('type');
+            const confirm = interaction.options.getBoolean('confirm');
+
+            if (!confirm) {
+                return interaction.reply({ 
+                    content: '❌ Bạn phải confirm=true để clear data (KHÔNG THỂ HOÀN TÁC)!', 
+                    ephemeral: true 
+                });
+            }
+
+            try {
+                const dbPath = path.join(__dirname, '../rift_database.json');
+                let db = { servers: {}, players: {}, gangs: {} };
+                
+                if (fs.existsSync(dbPath)) {
+                    db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                }
+
+                const beforeCount = {
+                    servers: Object.keys(db.servers || {}).length,
+                    players: Object.keys(db.players || {}).length,
+                    gangs: Object.keys(db.gangs || {}).length
+                };
+
+                if (type === 'all') {
+                    db = { servers: {}, players: {}, gangs: {} };
+                } else if (type === 'players') {
+                    db.players = {};
+                } else if (type === 'gangs') {
+                    db.gangs = {};
+                } else if (type === 'servers') {
+                    db.servers = {};
+                } else if (type === 'old') {
+                    // Clear data from servers ≥38h old based on server age
+                    const maxServerAge = 38 * 60; // 38 tiếng = 2280 phút  
+                    const now = Math.floor(Date.now() / 1000);
+                    
+                    // Find servers ≥38h old
+                    const serversToDelete = [];
+                    for (const [jobId, data] of Object.entries(db.servers || {})) {
+                        const currentAge = data.ageAtScan + Math.floor((now - data.timestamp) / 60);
+                        
+                        if (currentAge >= maxServerAge) {
+                            serversToDelete.push(jobId);
+                        }
+                    }
+
+                    // Delete old servers
+                    serversToDelete.forEach(jobId => {
+                        delete db.servers[jobId];
+                    });
+
+                    // Delete players from old servers
+                    for (const [name, data] of Object.entries(db.players || {})) {
+                        if (serversToDelete.includes(data.jobId)) {
+                            delete db.players[name];
+                        }
+                    }
+
+                    // Delete gangs from old servers
+                    for (const [name, data] of Object.entries(db.gangs || {})) {
+                        if (serversToDelete.includes(data.jobId)) {
+                            delete db.gangs[name];
+                        }
+                    }
+                }
+
+                // Save updated database
+                fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+
+                const afterCount = {
+                    servers: Object.keys(db.servers || {}).length,
+                    players: Object.keys(db.players || {}).length,
+                    gangs: Object.keys(db.gangs || {}).length
+                };
+
+                const embed = new EmbedBuilder()
+                    .setTitle('🧹 Database Cleared')
+                    .setColor(0xff6600)
+                    .addFields(
+                        { name: 'Clear Type', value: type, inline: true },
+                        { name: 'Executed By', value: interaction.user.username, inline: true },
+                        { name: 'Timestamp', value: new Date().toLocaleString('vi-VN'), inline: true },
+                        { 
+                            name: 'Servers', 
+                            value: `${beforeCount.servers} → ${afterCount.servers} (-${beforeCount.servers - afterCount.servers})`, 
+                            inline: true 
+                        },
+                        { 
+                            name: 'Players', 
+                            value: `${beforeCount.players} → ${afterCount.players} (-${beforeCount.players - afterCount.players})`, 
+                            inline: true 
+                        },
+                        { 
+                            name: 'Gangs', 
+                            value: `${beforeCount.gangs} → ${afterCount.gangs} (-${beforeCount.gangs - afterCount.gangs})`, 
+                            inline: true 
+                        }
+                    );
+
+                // Log the clear action
+                usageLogger.logUsage(
+                    userId, 
+                    interaction.user.username, 
+                    'cleardata', 
+                    'success',
+                    { 
+                        type: type,
+                        beforeCount: beforeCount,
+                        afterCount: afterCount
+                    }
+                );
+
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+
+            } catch (error) {
+                console.error('Error clearing data:', error);
+                
+                usageLogger.logUsage(
+                    userId, 
+                    interaction.user.username, 
+                    'cleardata', 
+                    'error',
+                    { error: error.message, type: type }
+                );
+
+                return interaction.reply({ 
+                    content: `❌ Lỗi clear data: ${error.message}`, 
+                    ephemeral: true 
+                });
+            }
         }
 
         if (commandName === 'createkey') {
@@ -960,6 +1126,9 @@ client.on('interactionCreate', async (interaction) => {
 // ==========================================
 client.once('ready', async () => {
     console.log(`✅ Bot đã online: ${client.user.tag}`);
+    console.log(`🔧 Config check:`);
+    console.log(`  - ADMIN_USER_IDS: ${CONFIG.ADMIN_USER_IDS.join(', ')}`);
+    console.log(`  - BRAIN_URL: ${CONFIG.BRAIN_URL}`);
     
     // Register slash commands
     try {
@@ -971,4 +1140,25 @@ client.once('ready', async () => {
     }
 });
 
-client.login(CONFIG.TOKEN);
+client.on('error', (error) => {
+    console.error('❌ Discord client error:', error);
+});
+
+client.on('warn', (warning) => {
+    console.warn('⚠️ Discord client warning:', warning);
+});
+
+// Validate config before login
+console.log('🤖 Đang khởi động Discord Bot...');
+console.log('🔑 Token validation: ✅ PASSED');
+console.log(`👑 Admin IDs: ${CONFIG.ADMIN_USER_IDS.join(', ')}`);
+console.log(`🌐 Brain URL: ${CONFIG.BRAIN_URL}`);
+
+client.login(CONFIG.TOKEN).catch(error => {
+    console.error('❌ Không thể đăng nhập Discord Bot:', error.message);
+    if (error.message.includes('invalid token')) {
+        console.error('💡 Hãy kiểm tra lại DISCORD_TOKEN trong Railway environment variables');
+        console.error('� Token phải có định dạng: MTxxx.xxx.xxx (không cần prefix "Bot")');
+    }
+    process.exit(1);
+});
