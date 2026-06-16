@@ -321,6 +321,27 @@ class DatabaseAPI {
             throw error;
         }
     }
+
+    async addJobIds(jobIdList) {
+        try {
+            const response = await fetch(`${this.brainUrl}/add-jobids`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ jobIds: jobIdList })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`✅Lỗi Add JobIds:`, error);
+            throw error;
+        }
+    }
 }
 
 // ==========================================
@@ -457,6 +478,14 @@ const commands = [
     new SlashCommandBuilder()
         .setName('scan')
         .setDescription('[ADMIN] Quét JobId mới để thêm vào queue'),
+
+    new SlashCommandBuilder()
+        .setName('jobid')
+        .setDescription('[ADMIN] Thêm JobId thủ công vào queue')
+        .addStringOption(option =>
+            option.setName('list')
+                .setDescription('Danh sách JobId cách nhau bởi dấu phẩy (,)')
+                .setRequired(true)),
 ];
 
 // ==========================================
@@ -919,6 +948,21 @@ client.on('interactionCreate', async (interaction) => {
                     usageLogger.logUsage(userId, username, 'scan', 'Success');
                     return await interaction.editReply({ embeds: [embed] });
                 } else {
+                    // Check if rate limited
+                    if (result.rateLimited) {
+                        const embed = new EmbedBuilder()
+                            .setTitle('⏳ Rate Limited')
+                            .setColor(0xffa500)
+                            .setDescription(`Roblox API is rate limiting. Please wait **${result.waitMinutes} minutes** before scanning again.`)
+                            .addFields(
+                                { name: 'Available JobIds', value: `${result.availableCount || 0}`, inline: true },
+                                { name: 'Tip', value: 'Use `/jobid` to manually add JobIds', inline: true }
+                            );
+
+                        usageLogger.logUsage(userId, username, 'scan', 'Rate Limited');
+                        return await interaction.editReply({ embeds: [embed] });
+                    }
+                    
                     usageLogger.logUsage(userId, username, 'scan', 'Failed');
                     return await interaction.editReply({ content: `✅Scan failed: ${result.error || 'Unknown error'}` });
                 }
@@ -932,6 +976,68 @@ client.on('interactionCreate', async (interaction) => {
                     .setDescription(`API Error: ${apiError.message}`);
                 
                 usageLogger.logUsage(userId, username, 'scan', 'ERROR');
+                return await interaction.editReply({ embeds: [errorEmbed] });
+            }
+        }
+
+        if (commandName === 'jobid') {
+            if (!isAdmin(userId)) {
+                return await interaction.editReply({ content: 'Only admins can use this command!' });
+            }
+
+            const listStr = interaction.options.getString('list');
+            
+            // Parse comma-separated JobIds
+            const jobIdList = listStr.split(',').map(id => id.trim()).filter(id => id.length > 0);
+            
+            if (jobIdList.length === 0) {
+                return await interaction.editReply({ content: '✅No valid JobIds provided. Use format: jobid1, jobid2, jobid3' });
+            }
+
+            try {
+                const result = await databaseAPI.addJobIds(jobIdList);
+                
+                if (result.success) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('📥 JobIds Added Manually')
+                        .setColor(0x00ff00)
+                        .addFields(
+                            { name: 'Total Submitted', value: `${jobIdList.length}`, inline: true },
+                            { name: 'Added to Queue', value: `${result.added}`, inline: true },
+                            { name: 'Skipped', value: `${result.skipped}`, inline: true },
+                            { name: 'Executed By', value: username, inline: true },
+                            { name: 'Time', value: new Date().toLocaleString('vi-VN'), inline: true }
+                        );
+
+                    // Show details about skipped JobIds if any
+                    if (result.details.skipped.length > 0) {
+                        const skippedText = result.details.skipped.slice(0, 5).map(s => 
+                            `\`${s.jobId.substring(0, 8)}...\` - ${s.reason}`
+                        ).join('\n');
+                        
+                        embed.addFields({
+                            name: 'Skipped JobIds',
+                            value: skippedText + (result.details.skipped.length > 5 ? `\n...and ${result.details.skipped.length - 5} more` : ''),
+                            inline: false
+                        });
+                    }
+
+                    usageLogger.logUsage(userId, username, 'jobid', `Added ${result.added}`);
+                    return await interaction.editReply({ embeds: [embed] });
+                } else {
+                    usageLogger.logUsage(userId, username, 'jobid', 'Failed');
+                    return await interaction.editReply({ content: `✅Add JobIds failed: ${result.error || 'Unknown error'}` });
+                }
+
+            } catch (apiError) {
+                console.error(`✅Lỗi Add JobIds API:`, apiError);
+                
+                const errorEmbed = new EmbedBuilder()
+                    .setTitle('✅Add JobIds Error')
+                    .setColor(0xff0000)
+                    .setDescription(`API Error: ${apiError.message}`);
+                
+                usageLogger.logUsage(userId, username, 'jobid', 'ERROR');
                 return await interaction.editReply({ embeds: [errorEmbed] });
             }
         }

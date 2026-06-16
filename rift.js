@@ -197,10 +197,12 @@ const server = http.createServer((req, res) => {
                 const data = JSON.parse(body);
                 const { jobId, ageMinutes } = data;
                 if (jobId) {
-                    db.servers[jobId] = {
-                        ageAtScan: ageMinutes,
-                        timestamp: Math.floor(Date.now() / 1000)
-                    };
+                    // Update server data (ageMinutes, timestamp) - allows updates to same JobId
+                    if (!db.servers[jobId]) {
+                        db.servers[jobId] = {};
+                    }
+                    db.servers[jobId].ageAtScan = ageMinutes;
+                    db.servers[jobId].timestamp = Math.floor(Date.now() / 1000);
                     saveDb();
                     console.log(`\n[REPORT] Server: ${jobId.substring(0, 8)}... | Tuoi: ${ageMinutes}m`);
                 }
@@ -268,10 +270,11 @@ const server = http.createServer((req, res) => {
                         console.log(`\n[PLAYER FOUND] ${name} | ${jobId.substring(0, 8)}... (updated to latest)`);
                     } else if (type === 'gang') {
                         // GANG: Lưu tất cả JobIds (multiple servers)
+                        // If same JobId scanned again with different gang, UPDATE gang list + timestamp
                         if (!db.gangs[name]) {
                             db.gangs[name] = {};
                         }
-                        db.gangs[name][jobId] = timestamp;
+                        db.gangs[name][jobId] = timestamp; // Update timestamp if already exists
                         console.log(`\n[GANG FOUND] ${name} | ${jobId.substring(0, 8)}... (total servers: ${Object.keys(db.gangs[name]).length})`);
                     }
                     saveDb();
@@ -294,6 +297,41 @@ const server = http.createServer((req, res) => {
                 success: false, 
                 error: err.message 
             }));
+        });
+    } else if (req.url === '/add-jobids' && req.method === 'POST') {
+        // API to manually add JobIds to queue
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const { jobIds } = JSON.parse(body);
+                
+                if (!Array.isArray(jobIds) || jobIds.length === 0) {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ 
+                        success: false, 
+                        error: 'jobIds must be a non-empty array' 
+                    }));
+                    return;
+                }
+
+                console.log(`\n[API] Thêm thủ công ${jobIds.length} JobIds...`);
+                const result = jobIdScanner.addJobIdsManually(jobIds);
+                
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({
+                    success: true,
+                    added: result.totalAdded,
+                    skipped: result.totalSkipped,
+                    details: result
+                }));
+            } catch (e) {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ 
+                    success: false, 
+                    error: e.message 
+                }));
+            }
         });
     } else if (req.url === '/status' && req.method === 'GET') {
         // API to get system status

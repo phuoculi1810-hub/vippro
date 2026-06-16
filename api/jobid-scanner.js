@@ -15,6 +15,7 @@ if (!fs.existsSync(dataDir)) {
 class JobIdScanner {
     constructor() {
         this.loadData();
+        this.rateLimitedUntil = 0; // Timestamp when rate limit expires
     }
 
     loadData() {
@@ -47,6 +48,20 @@ class JobIdScanner {
     }
 
     async scanNewJobIds() {
+        // Check if still rate limited
+        const now = Date.now();
+        if (this.rateLimitedUntil > now) {
+            const waitMinutes = Math.ceil((this.rateLimitedUntil - now) / 60000);
+            console.log(`⏳ [JobId Scanner] Vẫn bị rate limit. Đợi thêm ${waitMinutes} phút...`);
+            return {
+                success: false,
+                error: `Rate limited. Wait ${waitMinutes} more minutes.`,
+                availableCount: this.jobIdsQueue.available.length,
+                rateLimited: true,
+                waitMinutes: waitMinutes
+            };
+        }
+
         console.log(`🚀 [JobId Scanner] Bắt đầu quét JobId cho game: ${PLACE_ID}...`);
         
         let allJobIds = [];
@@ -109,9 +124,23 @@ class JobIdScanner {
 
         } catch (error) {
             console.error('❌ [JobId Scanner] Lỗi:', error.message);
+            
+            // Check if rate limited (429 error)
             if (error.response && error.response.status === 429) {
-                console.error('⚠️ Rate Limit: Bị Roblox chặn tạm thời. Đợi vài phút rồi thử lại.');
+                // Set rate limit for 20 minutes
+                this.rateLimitedUntil = Date.now() + (20 * 60 * 1000);
+                console.error('⚠️ Rate Limit: Bị Roblox chặn. Đợi 20 phút trước khi quét lại.');
+                console.error(`⏰ Có thể quét lại sau: ${new Date(this.rateLimitedUntil).toLocaleTimeString('vi-VN')}`);
+                
+                return {
+                    success: false,
+                    error: 'Rate limited by Roblox. Wait 20 minutes.',
+                    availableCount: this.jobIdsQueue.available.length,
+                    rateLimited: true,
+                    waitMinutes: 20
+                };
             }
+            
             return {
                 success: false,
                 error: error.message,
@@ -211,6 +240,47 @@ class JobIdScanner {
         }
         
         return stuckItems.length;
+    }
+
+    // Manually add JobIds to queue (for Discord bot /jobid command)
+    addJobIdsManually(jobIdList) {
+        const added = [];
+        const skipped = [];
+        
+        jobIdList.forEach(jobId => {
+            // Skip if already used
+            if (this.usedJobIds.has(jobId)) {
+                skipped.push({ jobId, reason: 'already used' });
+                return;
+            }
+            
+            // Skip if already in available queue
+            if (this.jobIdsQueue.available.includes(jobId)) {
+                skipped.push({ jobId, reason: 'already in queue' });
+                return;
+            }
+            
+            // Skip if currently scanning
+            if (this.jobIdsQueue.scanning.some(item => item.jobId === jobId)) {
+                skipped.push({ jobId, reason: 'currently scanning' });
+                return;
+            }
+            
+            // Add to queue
+            this.jobIdsQueue.available.push(jobId);
+            added.push(jobId);
+        });
+        
+        this.saveData();
+        
+        console.log(`📥 [JobId Scanner] Thêm thủ công: ${added.length} JobIds, bỏ qua: ${skipped.length}`);
+        
+        return {
+            added: added,
+            skipped: skipped,
+            totalAdded: added.length,
+            totalSkipped: skipped.length
+        };
     }
 }
 
